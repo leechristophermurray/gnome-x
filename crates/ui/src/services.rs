@@ -44,14 +44,14 @@ impl AppServices {
         );
 
         let browse = Arc::new(BrowseUseCase::new(
-            ego_client,
-            installer.clone(),
+            ego_client.clone(),
             shell_proxy.clone(),
         ));
 
         let manage = Arc::new(ManageUseCase::new(
             installer.clone(),
             shell_proxy.clone(),
+            ego_client.clone(),
         ));
 
         let customize = Arc::new(CustomizeUseCase::new(

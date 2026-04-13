@@ -1,7 +1,7 @@
 // Copyright 2026 GNOME X Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::ports::{ExtensionRepository, LocalInstaller, ShellProxy};
+use crate::ports::{ExtensionRepository, ShellProxy};
 use crate::AppError;
 use gnomex_domain::{Extension, ExtensionUuid, SearchResult};
 use std::sync::Arc;
@@ -9,19 +9,16 @@ use std::sync::Arc;
 /// Use case: browse and install extensions from remote sources.
 pub struct BrowseUseCase {
     extension_repo: Arc<dyn ExtensionRepository>,
-    installer: Arc<dyn LocalInstaller>,
     shell: Arc<dyn ShellProxy>,
 }
 
 impl BrowseUseCase {
     pub fn new(
         extension_repo: Arc<dyn ExtensionRepository>,
-        installer: Arc<dyn LocalInstaller>,
         shell: Arc<dyn ShellProxy>,
     ) -> Self {
         Self {
             extension_repo,
-            installer,
             shell,
         }
     }
@@ -59,13 +56,10 @@ impl BrowseUseCase {
         Ok(result)
     }
 
-    /// Download and install an extension, then enable it.
+    /// Install an extension via GNOME Shell's D-Bus interface.
+    /// This delegates the full download, extraction, and enablement to the shell.
     pub async fn install_extension(&self, uuid: &ExtensionUuid) -> Result<(), AppError> {
-        let shell_version = self.shell.get_shell_version().await?;
-        let zip_data = self.extension_repo.download(uuid, &shell_version).await?;
-        self.installer.install_extension(uuid, &zip_data).await?;
-        self.shell.enable_extension(uuid).await?;
-        Ok(())
+        self.shell.install_extension(uuid).await
     }
 
     /// Get full details for a single extension.

@@ -88,22 +88,39 @@ impl ShellProxy for DbusShellProxy {
 
             let version = get_f64_prop(props, "version").unwrap_or(0.0) as u32;
 
+            let creator = get_string_prop(props, "original-author").unwrap_or_default();
+            let homepage_url = get_string_prop(props, "url");
+
             result.push(Extension {
                 uuid,
                 name,
                 description,
-                creator: String::new(),
+                creator,
                 shell_versions: vec![],
                 version,
                 download_url: None,
                 screenshot_url: None,
-                homepage_url: None,
+                homepage_url,
                 pk: None,
                 state,
             });
         }
 
         Ok(result)
+    }
+
+    async fn install_extension(&self, uuid: &ExtensionUuid) -> Result<(), AppError> {
+        let proxy = ShellExtensionsProxy::new(&self.connection)
+            .await
+            .map_err(|e| AppError::Shell(e.to_string()))?;
+
+        let result = proxy
+            .install_remote_extension(uuid.as_str())
+            .await
+            .map_err(|e| AppError::Shell(format!("install via D-Bus failed: {e}")))?;
+
+        tracing::info!("InstallRemoteExtension({uuid}) returned: {result}");
+        Ok(())
     }
 
     async fn enable_extension(&self, uuid: &ExtensionUuid) -> Result<(), AppError> {
@@ -154,6 +171,8 @@ impl ShellProxy for DbusShellProxy {
 )]
 trait ShellExtensions {
     fn list_extensions(&self) -> zbus::Result<HashMap<String, HashMap<String, OwnedValue>>>;
+
+    fn install_remote_extension(&self, uuid: &str) -> zbus::Result<String>;
 
     fn enable_extension(&self, uuid: &str) -> zbus::Result<bool>;
 

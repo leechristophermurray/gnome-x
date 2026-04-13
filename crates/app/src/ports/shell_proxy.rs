@@ -13,6 +13,9 @@ pub trait ShellProxy: Send + Sync {
     /// List all extensions known to GNOME Shell (installed on this system).
     async fn list_extensions(&self) -> Result<Vec<Extension>, AppError>;
 
+    /// Install a remote extension via GNOME Shell (handles download + enable).
+    async fn install_extension(&self, uuid: &ExtensionUuid) -> Result<(), AppError>;
+
     /// Enable a shell extension.
     async fn enable_extension(&self, uuid: &ExtensionUuid) -> Result<(), AppError>;
 
