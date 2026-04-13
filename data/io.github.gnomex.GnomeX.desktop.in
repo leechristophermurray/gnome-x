@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=GNOME X
+Comment=Unified GNOME customization hub
+Exec=gnome-x
+Icon=io.github.gnomex.GnomeX
+Keywords=extensions;themes;icons;customization;packs;
+StartupNotify=true
+Terminal=false
+Type=Application
+Categories=GNOME;GTK;Utility;Settings;
+DBusActivatable=true

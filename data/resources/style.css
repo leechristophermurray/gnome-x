@@ -1,0 +1,13 @@
+/* GNOME X — Custom Styles
+ *
+ * Keep this minimal. Use Libadwaita CSS variables and built-in style classes
+ * instead of hardcoded values. See:
+ * https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1-latest/css-variables.html
+ */
+
+/* Subtle background tint for the explore search area */
+.explore-search-area {
+    background-color: alpha(var(--accent-bg-color), 0.05);
+    border-radius: 12px;
+    padding: 12px;
+}

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.gnomex.GnomeX</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+
+  <name>GNOME X</name>
+  <summary>Unified GNOME customization hub</summary>
+  <description>
+    <p>
+      GNOME X brings extension management, theme installation, icon pack management,
+      and Experience Packs into a single, polished GTK4/Libadwaita application.
+    </p>
+    <p>
+      Experience Packs let you snapshot a complete desktop configuration — theme, icons,
+      cursor, extensions, and settings — into a shareable manifest, turning 30-minute
+      tutorials into 1-click installs.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.gnomex.GnomeX.desktop</launchable>
+
+  <url type="homepage">https://github.com/gnomex/gnome-x</url>
+  <url type="bugtracker">https://github.com/gnomex/gnome-x/issues</url>
+
+  <developer id="io.github.gnomex">
+    <name>GNOME X Contributors</name>
+  </developer>
+
+  <content_rating type="oars-1.1" />
+
+  <branding>
+    <color type="primary" scheme_preference="light">#99c1f1</color>
+    <color type="primary" scheme_preference="dark">#1a5fb4</color>
+  </branding>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </recommends>
+
+  <releases>
+    <release version="0.1.0" date="2026-04-13">
+      <description>
+        <p>Initial release — Phase 1 MVP</p>
+        <ul>
+          <li>Browse and search GNOME Shell extensions</li>
+          <li>Install, enable, and disable extensions</li>
+          <li>View installed extensions with toggle switches</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>

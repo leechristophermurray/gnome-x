@@ -1,0 +1,28 @@
+[package]
+name = "gnomex-infra"
+description = "GNOME X infrastructure layer — HTTP clients, D-Bus proxy, filesystem ops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# Red layer (L=3): concrete implementations of ports defined in gnomex-app
+[dependencies]
+gnomex-domain = { workspace = true }
+gnomex-app = { workspace = true }
+
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+zbus = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+directories = { workspace = true }
+url = { workspace = true }

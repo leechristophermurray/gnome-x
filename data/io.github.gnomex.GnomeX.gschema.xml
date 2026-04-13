@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.github.gnomex.GnomeX" path="/io/github/gnomex/GnomeX/">
+    <key name="window-width" type="i">
+      <default>900</default>
+      <summary>Window width</summary>
+    </key>
+    <key name="window-height" type="i">
+      <default>640</default>
+      <summary>Window height</summary>
+    </key>
+    <key name="window-maximized" type="b">
+      <default>false</default>
+      <summary>Window maximized state</summary>
+    </key>
+    <key name="disable-version-validation" type="b">
+      <default>false</default>
+      <summary>Disable extension version validation</summary>
+      <description>Allow installing extensions not marked compatible with the current GNOME Shell version</description>
+    </key>
+  </schema>
+</schemalist>

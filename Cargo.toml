@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/domain",
+    "crates/app",
+    "crates/infra",
+    "crates/ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["GNOME X Contributors"]
+repository = "https://github.com/gnomex/gnome-x"
+
+[workspace.dependencies]
+gnomex-domain = { path = "crates/domain" }
+gnomex-app = { path = "crates/app" }
+gnomex-infra = { path = "crates/infra" }
+
+async-trait = "0.1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+quick-xml = { version = "0.36", features = ["serialize"] }
+zbus = "5"
+flate2 = "1"
+tar = "0.4"
+zip = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+url = { version = "2", features = ["serde"] }
+anyhow = "1"
+
+gtk = { version = "0.9", package = "gtk4", features = ["v4_14"] }
+adw = { version = "0.7", package = "libadwaita", features = ["v1_5"] }
+relm4 = "0.9"
+relm4-icons = "0.9"
+gio = "0.20"
+glib = "0.20"

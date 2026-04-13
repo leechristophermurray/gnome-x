@@ -1,0 +1,53 @@
+{
+    "app-id": "io.github.gnomex.GnomeX",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "47",
+    "sdk": "org.gnome.Sdk",
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.rust-stable"
+    ],
+    "command": "gnome-x",
+    "finish-args": [
+        "--share=ipc",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--device=dri",
+        "--share=network",
+        "--talk-name=org.gnome.Shell",
+        "--talk-name=org.gnome.Shell.Extensions",
+        "--filesystem=~/.local/share/gnome-shell/extensions:create",
+        "--filesystem=~/.themes:create",
+        "--filesystem=~/.icons:create",
+        "--filesystem=~/.local/share/themes:create",
+        "--filesystem=~/.local/share/icons:create",
+        "--filesystem=~/.local/share/gnome-x:create",
+        "--filesystem=xdg-pictures/Wallpapers:create"
+    ],
+    "build-options": {
+        "append-path": "/usr/lib/sdk/rust-stable/bin",
+        "env": {
+            "CARGO_HOME": "/run/build/gnome-x/cargo",
+            "RUST_BACKTRACE": "1"
+        }
+    },
+    "modules": [
+        {
+            "name": "gnome-x",
+            "buildsystem": "simple",
+            "build-commands": [
+                "cargo --offline build --release -p gnomex-ui",
+                "install -Dm755 target/release/gnomex-ui /app/bin/gnome-x",
+                "install -Dm644 data/io.github.gnomex.GnomeX.desktop.in /app/share/applications/io.github.gnomex.GnomeX.desktop",
+                "install -Dm644 data/io.github.gnomex.GnomeX.metainfo.xml.in /app/share/metainfo/io.github.gnomex.GnomeX.metainfo.xml",
+                "install -Dm644 data/io.github.gnomex.GnomeX.gschema.xml /app/share/glib-2.0/schemas/io.github.gnomex.GnomeX.gschema.xml",
+                "glib-compile-schemas /app/share/glib-2.0/schemas/"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "../.."
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,23 @@
+[package]
+name = "gnomex-ui"
+description = "GNOME X user interface — GTK4/Libadwaita/Relm4 application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# Yellow layer (L=2): UI adapters — depends on domain, app, and infra (for composition root)
+[dependencies]
+gnomex-domain = { workspace = true }
+gnomex-app = { workspace = true }
+gnomex-infra = { workspace = true }
+
+gtk = { workspace = true }
+adw = { workspace = true }
+relm4 = { workspace = true }
+gio = { workspace = true }
+glib = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }

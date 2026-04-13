@@ -1,0 +1,10 @@
+[package]
+name = "gnomex-domain"
+description = "GNOME X domain layer — pure types, validation, and business rules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# Green layer (L=0): ZERO external dependencies
+[dependencies]

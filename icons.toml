@@ -1,0 +1,13 @@
+# relm4-icons configuration
+# List symbolic icon names used by GNOME X
+# See: https://docs.rs/relm4-icons/latest/relm4_icons/
+
+icons = [
+    "system-search-symbolic",
+    "view-grid-symbolic",
+    "package-x-generic-symbolic",
+    "emblem-system-symbolic",
+    "list-add-symbolic",
+    "user-trash-symbolic",
+    "preferences-system-symbolic",
+]
