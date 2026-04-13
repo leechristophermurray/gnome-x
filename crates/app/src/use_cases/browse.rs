@@ -27,15 +27,36 @@ impl BrowseUseCase {
     }
 
     /// Search for extensions by query string.
+    ///
+    /// Results are cross-referenced against locally installed extensions so
+    /// that each item carries its real on-disk state (Enabled / Disabled / …)
+    /// rather than the blanket `Available` the repository returns.
     pub async fn search_extensions(
         &self,
         query: &str,
         page: u32,
     ) -> Result<SearchResult<Extension>, AppError> {
         let shell_version = self.shell.get_shell_version().await?;
-        self.extension_repo
+        let mut result = self
+            .extension_repo
             .search(query, &shell_version, page)
-            .await
+            .await?;
+
+        // Build a lookup of locally-known extension states.
+        if let Ok(installed) = self.shell.list_extensions().await {
+            let state_map: std::collections::HashMap<_, _> = installed
+                .into_iter()
+                .map(|e| (e.uuid.clone(), e.state))
+                .collect();
+
+            for ext in &mut result.items {
+                if let Some(&state) = state_map.get(&ext.uuid) {
+                    ext.state = state;
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Download and install an extension, then enable it.

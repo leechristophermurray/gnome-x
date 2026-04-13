@@ -8,7 +8,6 @@ use reqwest::Client;
 use serde::Deserialize;
 
 const EGO_BASE: &str = "https://extensions.gnome.org";
-
 /// Concrete adapter: extensions.gnome.org (EGO) HTTP client.
 pub struct EgoClient {
     http: Client,
@@ -25,38 +24,63 @@ impl EgoClient {
     }
 }
 
+// --- Search endpoint DTOs ---
+
 #[derive(Debug, Deserialize)]
 struct EgoSearchResponse {
-    extensions: Vec<EgoExtension>,
     total: u32,
+    extensions: Vec<EgoSearchResult>,
     numpages: u32,
 }
 
 #[derive(Debug, Deserialize)]
-struct EgoExtension {
+struct EgoSearchResult {
     uuid: String,
     name: String,
     description: String,
-    creator: String,
-    pk: u64,
+    creator: EgoCreator,
+    #[serde(alias = "pk")]
+    id: u64,
     link: String,
     screenshot: Option<String>,
+    #[serde(default)]
     shell_version_map: serde_json::Value,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum EgoCreator {
+    Object { username: String },
+    Plain(String),
+}
+
+impl EgoCreator {
+    fn name(&self) -> &str {
+        match self {
+            Self::Object { username } => username,
+            Self::Plain(s) => s,
+        }
+    }
+}
+
+// --- Extension-info endpoint DTO ---
 
 #[derive(Debug, Deserialize)]
 struct EgoInfoResponse {
     uuid: String,
     name: String,
     description: String,
-    creator: String,
+    creator: EgoCreator,
     pk: u64,
     link: String,
     screenshot: Option<String>,
+    #[serde(default)]
     shell_version_map: serde_json::Value,
     version: Option<u32>,
     download_url: Option<String>,
 }
+
+// --- Mapping ---
 
 fn parse_shell_versions_from_map(map: &serde_json::Value) -> Vec<ShellVersion> {
     let Some(obj) = map.as_object() else {
@@ -67,24 +91,26 @@ fn parse_shell_versions_from_map(map: &serde_json::Value) -> Vec<ShellVersion> {
         .collect()
 }
 
-fn ego_ext_to_domain(e: &EgoExtension) -> Extension {
+fn search_result_to_domain(e: &EgoSearchResult) -> Extension {
     Extension {
         uuid: ExtensionUuid::new(&e.uuid).unwrap_or_else(|_| {
-            // Fallback: EGO should always return valid UUIDs, but handle gracefully
-            ExtensionUuid::new(&format!("{}@unknown", e.pk)).unwrap()
+            ExtensionUuid::new(&format!("{}@unknown", e.id)).unwrap()
         }),
         name: e.name.clone(),
         description: e.description.clone(),
-        creator: e.creator.clone(),
+        creator: e.creator.name().to_owned(),
         shell_versions: parse_shell_versions_from_map(&e.shell_version_map),
         version: 0,
         download_url: None,
-        screenshot_url: e
-            .screenshot
-            .as_ref()
-            .map(|s| format!("{EGO_BASE}{s}")),
+        screenshot_url: e.screenshot.as_ref().map(|s| {
+            if s.starts_with("http") {
+                s.clone()
+            } else {
+                format!("{EGO_BASE}{s}")
+            }
+        }),
         homepage_url: Some(format!("{EGO_BASE}{}", e.link)),
-        pk: Some(e.pk),
+        pk: Some(e.id),
         state: ExtensionState::Available,
     }
 }
@@ -98,11 +124,13 @@ impl ExtensionRepository for EgoClient {
         page: u32,
     ) -> Result<SearchResult<Extension>, AppError> {
         let url = format!(
-            "{EGO_BASE}/api/v1/extensions/?search={query}&shell_version={shell}&page={page}",
+            "{EGO_BASE}/extension-query/?search={query}&shell_version={shell}&page={page}",
             query = urlencoding(query),
             shell = shell_version.major,
             page = page,
         );
+
+        tracing::debug!("EGO search: {url}");
 
         let resp: EgoSearchResponse = self
             .http
@@ -115,7 +143,7 @@ impl ExtensionRepository for EgoClient {
             .map_err(|e| AppError::Repository(e.to_string()))?;
 
         Ok(SearchResult {
-            items: resp.extensions.iter().map(ego_ext_to_domain).collect(),
+            items: resp.extensions.iter().map(search_result_to_domain).collect(),
             total: resp.total,
             page,
             pages: resp.numpages,
@@ -133,6 +161,8 @@ impl ExtensionRepository for EgoClient {
             shell = shell_version.major,
         );
 
+        tracing::debug!("EGO info: {url}");
+
         let info: EgoInfoResponse = self
             .http
             .get(&url)
@@ -148,15 +178,23 @@ impl ExtensionRepository for EgoClient {
                 .map_err(|e| AppError::Repository(e.to_string()))?,
             name: info.name,
             description: info.description,
-            creator: info.creator,
+            creator: info.creator.name().to_owned(),
             shell_versions: parse_shell_versions_from_map(&info.shell_version_map),
             version: info.version.unwrap_or(0),
-            download_url: info
-                .download_url
-                .map(|p| format!("{EGO_BASE}{p}")),
-            screenshot_url: info
-                .screenshot
-                .map(|s| format!("{EGO_BASE}{s}")),
+            download_url: info.download_url.map(|p| {
+                if p.starts_with("http") {
+                    p
+                } else {
+                    format!("{EGO_BASE}{p}")
+                }
+            }),
+            screenshot_url: info.screenshot.map(|s| {
+                if s.starts_with("http") {
+                    s
+                } else {
+                    format!("{EGO_BASE}{s}")
+                }
+            }),
             homepage_url: Some(format!("{EGO_BASE}{}", info.link)),
             pk: Some(info.pk),
             state: ExtensionState::Available,
@@ -168,12 +206,13 @@ impl ExtensionRepository for EgoClient {
         uuid: &ExtensionUuid,
         shell_version: &ShellVersion,
     ) -> Result<Vec<u8>, AppError> {
-        // First get the info to find the download URL
         let ext = self.get_info(uuid, shell_version).await?;
 
         let download_url = ext
             .download_url
             .ok_or_else(|| AppError::Repository(format!("no download URL for {uuid}")))?;
+
+        tracing::debug!("EGO download: {download_url}");
 
         let bytes = self
             .http

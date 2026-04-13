@@ -8,6 +8,12 @@ use adw::prelude::*;
 use gnomex_domain::{ExtensionState, ExtensionUuid};
 use relm4::prelude::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowMode {
+    Explore,
+    Installed,
+}
+
 pub struct ExtensionRowModel {
     name: String,
     uuid: String,
@@ -15,6 +21,7 @@ pub struct ExtensionRowModel {
     #[allow(dead_code)]
     description: String,
     state: ExtensionState,
+    mode: RowMode,
 }
 
 pub struct ExtensionRowInit {
@@ -23,6 +30,7 @@ pub struct ExtensionRowInit {
     pub creator: String,
     pub description: String,
     pub state: ExtensionState,
+    pub mode: RowMode,
 }
 
 #[derive(Debug)]
@@ -56,15 +64,21 @@ impl FactoryComponent for ExtensionRowModel {
                 gtk::Button {
                     set_label: "Install",
                     add_css_class: "suggested-action",
-                    add_css_class: "pill",
                     #[watch]
                     set_visible: self.state == ExtensionState::Available,
                     connect_clicked => ExtensionRowMsg::ToggleEnabled(true),
                 },
 
+                gtk::Label {
+                    set_label: "Installed",
+                    add_css_class: "dim-label",
+                    #[watch]
+                    set_visible: self.mode == RowMode::Explore && self.state != ExtensionState::Available,
+                },
+
                 gtk::Switch {
                     #[watch]
-                    set_visible: self.state != ExtensionState::Available,
+                    set_visible: self.mode == RowMode::Installed && self.state != ExtensionState::Available,
                     #[watch]
                     set_active: self.state == ExtensionState::Enabled,
                     set_valign: gtk::Align::Center,
@@ -84,6 +98,7 @@ impl FactoryComponent for ExtensionRowModel {
             creator: init.creator,
             description: init.description,
             state: init.state,
+            mode: init.mode,
         }
     }
 

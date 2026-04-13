@@ -5,7 +5,9 @@
 //! Follows HIG: SearchEntry at top, AdwStatusPage for empty/loading states,
 //! GtkListBox with .boxed-list for results.
 
-use crate::components::extension_row::{ExtensionRowInit, ExtensionRowModel, ExtensionRowOutput};
+use crate::components::extension_row::{
+    ExtensionRowInit, ExtensionRowModel, ExtensionRowOutput, RowMode,
+};
 use crate::services::AppServices;
 use adw::prelude::*;
 use gnomex_app::use_cases::BrowseUseCase;
@@ -20,8 +22,22 @@ pub struct ExploreModel {
     browse: Arc<BrowseUseCase>,
     search_query: String,
     results: FactoryVecDeque<ExtensionRowModel>,
+    content_stack: gtk::Stack,
     is_loading: bool,
     has_results: bool,
+}
+
+impl ExploreModel {
+    fn update_stack(&self) {
+        let name = if self.is_loading {
+            "loading"
+        } else if self.has_results {
+            "results"
+        } else {
+            "empty"
+        };
+        self.content_stack.set_visible_child_name(name);
+    }
 }
 
 #[derive(Debug)]
@@ -68,18 +84,6 @@ impl SimpleComponent for ExploreModel {
                     },
                 },
             },
-
-            #[name = "content_stack"]
-            gtk::Stack {
-                #[watch]
-                set_visible_child_name: if model.is_loading {
-                    "loading"
-                } else if model.has_results {
-                    "results"
-                } else {
-                    "empty"
-                },
-            },
         }
     }
 
@@ -96,24 +100,15 @@ impl SimpleComponent for ExploreModel {
                     ExtensionRowOutput::Toggle(_, _) => unreachable!(),
                 });
 
-        let model = ExploreModel {
-            handle: services.handle,
-            browse: services.browse,
-            search_query: String::new(),
-            results,
-            is_loading: false,
-            has_results: false,
-        };
+        // Build the content stack with all children before view_output!
+        let content_stack = gtk::Stack::new();
 
-        let widgets = view_output!();
-
-        // Build stack pages programmatically
         let empty_page = adw::StatusPage::builder()
             .icon_name("system-search-symbolic")
             .title("Explore Extensions")
             .description("Search for GNOME Shell extensions to install")
             .build();
-        widgets.content_stack.add_named(&empty_page, Some("empty"));
+        content_stack.add_named(&empty_page, Some("empty"));
 
         let loading_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -132,9 +127,7 @@ impl SimpleComponent for ExploreModel {
             .css_classes(["dim-label"])
             .build();
         loading_box.append(&loading_label);
-        widgets
-            .content_stack
-            .add_named(&loading_box, Some("loading"));
+        content_stack.add_named(&loading_box, Some("loading"));
 
         let results_scroll = gtk::ScrolledWindow::builder().vexpand(true).build();
         let results_clamp = adw::Clamp::builder()
@@ -144,14 +137,32 @@ impl SimpleComponent for ExploreModel {
             .margin_start(12)
             .margin_end(12)
             .build();
-        let results_list = model.results.widget().clone();
-        results_list.set_selection_mode(gtk::SelectionMode::None);
-        results_list.add_css_class("boxed-list");
-        results_clamp.set_child(Some(&results_list));
+        {
+            let w: &gtk::ListBox = results.widget();
+            w.set_selection_mode(gtk::SelectionMode::None);
+            w.add_css_class("boxed-list");
+            results_clamp.set_child(Some(w));
+        }
         results_scroll.set_child(Some(&results_clamp));
-        widgets
-            .content_stack
-            .add_named(&results_scroll, Some("results"));
+        content_stack.add_named(&results_scroll, Some("results"));
+
+        content_stack.set_visible_child_name("empty");
+        content_stack.set_vexpand(true);
+
+        let model = ExploreModel {
+            handle: services.handle,
+            browse: services.browse,
+            search_query: String::new(),
+            results,
+            content_stack: content_stack.clone(),
+            is_loading: false,
+            has_results: false,
+        };
+
+        let widgets = view_output!();
+
+        // Append the pre-built stack to the root box
+        root.append(&content_stack);
 
         ComponentParts { model, widgets }
     }
@@ -160,6 +171,12 @@ impl SimpleComponent for ExploreModel {
         match msg {
             ExploreMsg::SearchChanged(query) => {
                 self.search_query = query;
+                if self.search_query.trim().is_empty() {
+                    self.has_results = false;
+                    self.is_loading = false;
+                    self.results.guard().clear();
+                    self.update_stack();
+                }
             }
             ExploreMsg::SearchActivated => {
                 if self.search_query.trim().is_empty() {
@@ -167,6 +184,7 @@ impl SimpleComponent for ExploreModel {
                 }
                 self.is_loading = true;
                 self.has_results = false;
+                self.update_stack();
 
                 let browse = self.browse.clone();
                 let query = self.search_query.clone();
@@ -188,6 +206,7 @@ impl SimpleComponent for ExploreModel {
             ExploreMsg::LoadResults(extensions) => {
                 self.is_loading = false;
                 self.has_results = !extensions.is_empty();
+                self.update_stack();
 
                 let mut guard = self.results.guard();
                 guard.clear();
@@ -198,12 +217,14 @@ impl SimpleComponent for ExploreModel {
                         creator: ext.creator,
                         description: ext.description,
                         state: ext.state,
+                        mode: RowMode::Explore,
                     });
                 }
             }
             ExploreMsg::SearchFailed(err) => {
                 self.is_loading = false;
                 self.has_results = false;
+                self.update_stack();
                 tracing::warn!("search error displayed to user: {err}");
             }
             ExploreMsg::InstallExtension(uuid) => {
@@ -226,11 +247,9 @@ impl SimpleComponent for ExploreModel {
             }
             ExploreMsg::InstallComplete(uuid) => {
                 tracing::info!("extension {uuid} installed successfully");
-                // TODO: show AdwToast confirmation
             }
             ExploreMsg::InstallFailed(err) => {
                 tracing::warn!("install error: {err}");
-                // TODO: show AdwToast error
             }
         }
     }
