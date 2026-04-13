@@ -3,8 +3,10 @@
 
 //! Explore view — unified search across extensions, themes, icons, and cursors.
 //! Shows popular/recent landing content when idle, search results when active.
+//! Clicking a row opens a full-screen detail view with screenshot.
 
 use crate::components::content_row::{ContentRowInit, ContentRowModel, ContentRowOutput};
+use crate::components::detail_view::{DetailItem, DetailViewModel, DetailViewMsg, DetailViewOutput};
 use crate::components::extension_row::{
     ExtensionRowInit, ExtensionRowModel, ExtensionRowOutput, RowMode,
 };
@@ -31,12 +33,17 @@ pub struct ExploreModel {
     search_query: String,
     ext_results: FactoryVecDeque<ExtensionRowModel>,
     content_results: FactoryVecDeque<ContentRowModel>,
+    detail: Controller<DetailViewModel>,
     content_stack: gtk::Stack,
     results_stack: gtk::Stack,
-    // Landing page widgets
+    category_box: gtk::Box,
     popular_ext_list: gtk::ListBox,
     recent_ext_list: gtk::ListBox,
     popular_themes_list: gtk::ListBox,
+    // Cached landing data for click handling
+    landing_popular_ext: Vec<Extension>,
+    landing_recent_ext: Vec<Extension>,
+    landing_popular_themes: Vec<ContentItem>,
     is_loading: bool,
     has_results: bool,
 }
@@ -51,6 +58,10 @@ impl ExploreModel {
             "landing"
         };
         self.content_stack.set_visible_child_name(name);
+
+        // Show category bar only when searching
+        let searching = !self.search_query.trim().is_empty() || self.has_results;
+        self.category_box.set_visible(searching);
     }
 
     fn show_result_list(&self) {
@@ -68,19 +79,42 @@ pub enum ExploreMsg {
     SetCategory(ExploreCategory),
     SearchChanged(String),
     SearchActivated,
-    // Landing data
+    // Landing
     LoadLanding,
     LandingPopularExt(Vec<Extension>),
     LandingRecentExt(Vec<Extension>),
     LandingPopularThemes(Vec<ContentItem>),
+    LandingPopularExtClicked(u32),
+    LandingRecentExtClicked(u32),
+    LandingPopularThemesClicked(u32),
     // Search results
     LoadExtensions(Vec<Extension>),
     LoadContent(Vec<ContentItem>),
+    // Detail view
+    ShowExtensionDetail {
+        name: String,
+        uuid: String,
+        creator: String,
+        description: String,
+        screenshot_url: Option<String>,
+        installed: bool,
+    },
+    ShowContentDetail {
+        name: String,
+        creator: String,
+        description: String,
+        id: u64,
+        preview_url: Option<String>,
+        installed: bool,
+    },
+    DetailBack,
     // Actions
     InstallExtension(ExtensionUuid),
     InstallExtComplete(ExtensionUuid),
     InstallContent(ContentId, u64, String),
     InstallContentComplete(String),
+    DetailInstallExt(String),
+    DetailInstallContent(u64, String),
     ApplyContent(String),
     SearchFailed(String),
     ActionFailed(String),
@@ -137,6 +171,21 @@ impl SimpleComponent for ExploreModel {
                 .forward(sender.input_sender(), |output| match output {
                     ExtensionRowOutput::Install(uuid) => ExploreMsg::InstallExtension(uuid),
                     ExtensionRowOutput::Toggle(_, _) => unreachable!(),
+                    ExtensionRowOutput::ShowDetail {
+                        name,
+                        uuid,
+                        creator,
+                        description,
+                        screenshot_url,
+                        installed,
+                    } => ExploreMsg::ShowExtensionDetail {
+                        name,
+                        uuid,
+                        creator,
+                        description,
+                        screenshot_url,
+                        installed,
+                    },
                 });
 
         // Content results factory
@@ -148,22 +197,58 @@ impl SimpleComponent for ExploreModel {
                         ExploreMsg::InstallContent(id, file_id, name)
                     }
                     ContentRowOutput::Apply(name) => ExploreMsg::ApplyContent(name),
+                    ContentRowOutput::ShowDetail {
+                        name,
+                        creator,
+                        description,
+                        id,
+                        preview_url,
+                        installed,
+                    } => ExploreMsg::ShowContentDetail {
+                        name,
+                        creator,
+                        description,
+                        id,
+                        preview_url,
+                        installed,
+                    },
                 });
 
-        // Category toggle bar
+        // Detail view controller
+        let detail = DetailViewModel::builder()
+            .launch(())
+            .forward(sender.input_sender(), |output| match output {
+                DetailViewOutput::Back => ExploreMsg::DetailBack,
+                DetailViewOutput::InstallExtension(uuid) => ExploreMsg::DetailInstallExt(uuid),
+                DetailViewOutput::InstallContent(id, name) => {
+                    ExploreMsg::DetailInstallContent(id, name)
+                }
+            });
+
+        // Category toggle bar — hidden by default, shown when searching
         let category_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .halign(gtk::Align::Center)
             .spacing(0)
             .css_classes(["linked"])
+            .visible(false)
             .build();
 
         let categories: &[(&str, ExploreCategory)] = &[
             ("Extensions", ExploreCategory::Extensions),
-            ("GTK Themes", ExploreCategory::Content(ContentCategory::GtkTheme)),
-            ("Shell Themes", ExploreCategory::Content(ContentCategory::ShellTheme)),
+            (
+                "GTK Themes",
+                ExploreCategory::Content(ContentCategory::GtkTheme),
+            ),
+            (
+                "Shell Themes",
+                ExploreCategory::Content(ContentCategory::ShellTheme),
+            ),
             ("Icons", ExploreCategory::Content(ContentCategory::IconTheme)),
-            ("Cursors", ExploreCategory::Content(ContentCategory::CursorTheme)),
+            (
+                "Cursors",
+                ExploreCategory::Content(ContentCategory::CursorTheme),
+            ),
         ];
 
         for (i, &(label, cat)) in categories.iter().enumerate() {
@@ -187,6 +272,7 @@ impl SimpleComponent for ExploreModel {
 
         // Content stack
         let content_stack = gtk::Stack::new();
+        content_stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
 
         // --- Landing page ---
         let landing_scroll = gtk::ScrolledWindow::builder().vexpand(true).build();
@@ -202,7 +288,6 @@ impl SimpleComponent for ExploreModel {
             .spacing(24)
             .build();
 
-        // Popular extensions section
         let popular_ext_label = gtk::Label::builder()
             .label("Popular Extensions")
             .halign(gtk::Align::Start)
@@ -212,10 +297,15 @@ impl SimpleComponent for ExploreModel {
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
+        {
+            let sender = sender.clone();
+            popular_ext_list.connect_row_activated(move |_, row| {
+                sender.input(ExploreMsg::LandingPopularExtClicked(row.index() as u32));
+            });
+        }
         landing_box.append(&popular_ext_label);
         landing_box.append(&popular_ext_list);
 
-        // Recently updated extensions section
         let recent_ext_label = gtk::Label::builder()
             .label("Recently Updated")
             .halign(gtk::Align::Start)
@@ -225,10 +315,15 @@ impl SimpleComponent for ExploreModel {
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
+        {
+            let sender = sender.clone();
+            recent_ext_list.connect_row_activated(move |_, row| {
+                sender.input(ExploreMsg::LandingRecentExtClicked(row.index() as u32));
+            });
+        }
         landing_box.append(&recent_ext_label);
         landing_box.append(&recent_ext_list);
 
-        // Popular themes section
         let popular_themes_label = gtk::Label::builder()
             .label("Popular Themes")
             .halign(gtk::Align::Start)
@@ -238,6 +333,12 @@ impl SimpleComponent for ExploreModel {
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
+        {
+            let sender = sender.clone();
+            popular_themes_list.connect_row_activated(move |_, row| {
+                sender.input(ExploreMsg::LandingPopularThemesClicked(row.index() as u32));
+            });
+        }
         landing_box.append(&popular_themes_label);
         landing_box.append(&popular_themes_list);
 
@@ -306,6 +407,9 @@ impl SimpleComponent for ExploreModel {
         results_stack.set_visible_child_name("extensions");
         content_stack.add_named(&results_stack, Some("results"));
 
+        // --- Detail page ---
+        content_stack.add_named(detail.widget(), Some("detail"));
+
         content_stack.set_visible_child_name("landing");
         content_stack.set_vexpand(true);
 
@@ -317,11 +421,16 @@ impl SimpleComponent for ExploreModel {
             search_query: String::new(),
             ext_results,
             content_results,
+            detail,
             content_stack: content_stack.clone(),
             results_stack: results_stack.clone(),
+            category_box: category_box.clone(),
             popular_ext_list: popular_ext_list.clone(),
             recent_ext_list: recent_ext_list.clone(),
             popular_themes_list: popular_themes_list.clone(),
+            landing_popular_ext: Vec::new(),
+            landing_recent_ext: Vec::new(),
+            landing_popular_themes: Vec::new(),
             is_loading: false,
             has_results: false,
         };
@@ -331,7 +440,6 @@ impl SimpleComponent for ExploreModel {
         root.insert_child_after(&category_box, root.first_child().as_ref());
         root.append(&content_stack);
 
-        // Kick off landing data load
         sender.input(ExploreMsg::LoadLanding);
 
         ComponentParts { model, widgets }
@@ -339,8 +447,8 @@ impl SimpleComponent for ExploreModel {
 
     fn update(&mut self, msg: ExploreMsg, sender: ComponentSender<Self>) {
         match msg {
+            // --- Landing ---
             ExploreMsg::LoadLanding => {
-                // Fire three parallel requests for landing content
                 let browse = self.browse.clone();
                 let sender1 = sender.input_sender().clone();
                 self.handle.spawn(async move {
@@ -370,13 +478,54 @@ impl SimpleComponent for ExploreModel {
             }
             ExploreMsg::LandingPopularExt(extensions) => {
                 populate_ext_landing_list(&self.popular_ext_list, &extensions);
+                self.landing_popular_ext = extensions;
             }
             ExploreMsg::LandingRecentExt(extensions) => {
                 populate_ext_landing_list(&self.recent_ext_list, &extensions);
+                self.landing_recent_ext = extensions;
             }
             ExploreMsg::LandingPopularThemes(items) => {
                 populate_content_landing_list(&self.popular_themes_list, &items);
+                self.landing_popular_themes = items;
             }
+            ExploreMsg::LandingPopularExtClicked(index) => {
+                if let Some(ext) = self.landing_popular_ext.get(index as usize) {
+                    sender.input(ExploreMsg::ShowExtensionDetail {
+                        name: ext.name.clone(),
+                        uuid: ext.uuid.as_str().to_owned(),
+                        creator: ext.creator.clone(),
+                        description: ext.description.clone(),
+                        screenshot_url: ext.screenshot_url.clone(),
+                        installed: ext.is_installed(),
+                    });
+                }
+            }
+            ExploreMsg::LandingRecentExtClicked(index) => {
+                if let Some(ext) = self.landing_recent_ext.get(index as usize) {
+                    sender.input(ExploreMsg::ShowExtensionDetail {
+                        name: ext.name.clone(),
+                        uuid: ext.uuid.as_str().to_owned(),
+                        creator: ext.creator.clone(),
+                        description: ext.description.clone(),
+                        screenshot_url: ext.screenshot_url.clone(),
+                        installed: ext.is_installed(),
+                    });
+                }
+            }
+            ExploreMsg::LandingPopularThemesClicked(index) => {
+                if let Some(item) = self.landing_popular_themes.get(index as usize) {
+                    sender.input(ExploreMsg::ShowContentDetail {
+                        name: item.name.clone(),
+                        creator: item.creator.clone(),
+                        description: item.description.clone(),
+                        id: item.id.0,
+                        preview_url: item.preview_url.clone(),
+                        installed: item.state != gnomex_domain::ContentState::Available,
+                    });
+                }
+            }
+
+            // --- Category / search ---
             ExploreMsg::SetCategory(cat) => {
                 self.category = cat;
                 self.show_result_list();
@@ -435,6 +584,8 @@ impl SimpleComponent for ExploreModel {
                     }
                 }
             }
+
+            // --- Results ---
             ExploreMsg::LoadExtensions(extensions) => {
                 self.is_loading = false;
                 self.has_results = !extensions.is_empty();
@@ -448,6 +599,7 @@ impl SimpleComponent for ExploreModel {
                         uuid: ext.uuid.as_str().to_owned(),
                         creator: ext.creator,
                         description: ext.description,
+                        screenshot_url: ext.screenshot_url,
                         state: ext.state,
                         mode: RowMode::Explore,
                     });
@@ -464,8 +616,10 @@ impl SimpleComponent for ExploreModel {
                     guard.push_back(ContentRowInit {
                         name: item.name,
                         creator: item.creator,
+                        description: item.description,
                         id: item.id.0,
                         file_id: 1,
+                        preview_url: item.preview_url,
                         state: item.state,
                     });
                 }
@@ -474,9 +628,62 @@ impl SimpleComponent for ExploreModel {
                 self.is_loading = false;
                 self.has_results = false;
                 self.update_stack();
-                tracing::warn!("search error: {err}");
                 let _ = sender.output(ExploreOutput::Toast(format!("Search failed: {err}")));
             }
+
+            // --- Detail view ---
+            ExploreMsg::ShowExtensionDetail {
+                name,
+                uuid,
+                creator,
+                description,
+                screenshot_url,
+                installed,
+            } => {
+                self.detail.emit(DetailViewMsg::Show(DetailItem::Extension {
+                    name,
+                    creator,
+                    uuid,
+                    description,
+                    screenshot_url,
+                    installed,
+                }));
+                self.content_stack.set_visible_child_name("detail");
+                self.category_box.set_visible(false);
+            }
+            ExploreMsg::ShowContentDetail {
+                name,
+                creator,
+                description,
+                id,
+                preview_url,
+                installed,
+            } => {
+                self.detail.emit(DetailViewMsg::Show(DetailItem::Content {
+                    name,
+                    creator,
+                    id,
+                    description,
+                    preview_url,
+                    installed,
+                }));
+                self.content_stack.set_visible_child_name("detail");
+                self.category_box.set_visible(false);
+            }
+            ExploreMsg::DetailBack => {
+                // Return to whatever was showing before detail
+                self.update_stack();
+            }
+            ExploreMsg::DetailInstallExt(uuid_str) => {
+                if let Ok(uuid) = ExtensionUuid::new(&uuid_str) {
+                    sender.input(ExploreMsg::InstallExtension(uuid));
+                }
+            }
+            ExploreMsg::DetailInstallContent(id, name) => {
+                sender.input(ExploreMsg::InstallContent(ContentId(id), 1, name));
+            }
+
+            // --- Actions ---
             ExploreMsg::InstallExtension(uuid) => {
                 let browse = self.browse.clone();
                 let input_sender = sender.input_sender().clone();
@@ -537,16 +744,13 @@ impl SimpleComponent for ExploreModel {
                 }
             }
             ExploreMsg::ActionFailed(err) => {
-                tracing::warn!("action error: {err}");
                 let _ = sender.output(ExploreOutput::Toast(err));
             }
         }
     }
 }
 
-/// Populate a landing list box with extension preview rows.
 fn populate_ext_landing_list(list: &gtk::ListBox, extensions: &[Extension]) {
-    // Clear existing
     while let Some(child) = list.first_child() {
         list.remove(&child);
     }
@@ -554,12 +758,15 @@ fn populate_ext_landing_list(list: &gtk::ListBox, extensions: &[Extension]) {
         let row = adw::ActionRow::builder()
             .title(&ext.name)
             .subtitle(&format!("by {}", ext.creator))
+            .activatable(true)
             .build();
+        let chevron = gtk::Image::from_icon_name("go-next-symbolic");
+        chevron.add_css_class("dim-label");
+        row.add_suffix(&chevron);
         list.append(&row);
     }
 }
 
-/// Populate a landing list box with content item preview rows.
 fn populate_content_landing_list(list: &gtk::ListBox, items: &[ContentItem]) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
@@ -568,7 +775,11 @@ fn populate_content_landing_list(list: &gtk::ListBox, items: &[ContentItem]) {
         let row = adw::ActionRow::builder()
             .title(&item.name)
             .subtitle(&format!("by {}", item.creator))
+            .activatable(true)
             .build();
+        let chevron = gtk::Image::from_icon_name("go-next-symbolic");
+        chevron.add_css_class("dim-label");
+        row.add_suffix(&chevron);
         list.append(&row);
     }
 }

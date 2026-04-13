@@ -4,6 +4,7 @@
 //! Installed view — lists all extensions on the system with enable/disable toggles.
 //! HIG pattern: boxed-list with AdwActionRow, AdwStatusPage for empty state.
 
+use crate::components::detail_view::{DetailItem, DetailViewModel, DetailViewMsg, DetailViewOutput};
 use crate::components::extension_row::{
     ExtensionRowInit, ExtensionRowModel, ExtensionRowOutput, RowMode,
 };
@@ -20,6 +21,7 @@ pub struct InstalledModel {
     handle: Handle,
     manage: Arc<ManageUseCase>,
     extensions: FactoryVecDeque<ExtensionRowModel>,
+    detail: Controller<DetailViewModel>,
     content_stack: gtk::Stack,
     has_extensions: bool,
     is_loading: bool,
@@ -46,6 +48,15 @@ pub enum InstalledMsg {
     ToggleExtension(ExtensionUuid, bool),
     ToggleComplete(ExtensionUuid, bool),
     ToggleFailed(String),
+    ShowDetail {
+        name: String,
+        uuid: String,
+        creator: String,
+        description: String,
+        screenshot_url: Option<String>,
+        installed: bool,
+    },
+    DetailBack,
 }
 
 #[derive(Debug)]
@@ -78,10 +89,35 @@ impl SimpleComponent for InstalledModel {
                         InstalledMsg::ToggleExtension(uuid, active)
                     }
                     ExtensionRowOutput::Install(_) => unreachable!(),
+                    ExtensionRowOutput::ShowDetail {
+                        name,
+                        uuid,
+                        creator,
+                        description,
+                        screenshot_url,
+                        installed,
+                    } => InstalledMsg::ShowDetail {
+                        name,
+                        uuid,
+                        creator,
+                        description,
+                        screenshot_url,
+                        installed,
+                    },
                 });
 
-        // Build the content stack with all children before view_output!
+        let detail = DetailViewModel::builder()
+            .launch(())
+            .forward(sender.input_sender(), |output| match output {
+                DetailViewOutput::Back => InstalledMsg::DetailBack,
+                DetailViewOutput::InstallExtension(_) | DetailViewOutput::InstallContent(_, _) => {
+                    InstalledMsg::Refresh
+                }
+            });
+
+        // Build the content stack
         let content_stack = gtk::Stack::new();
+        content_stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
 
         let empty_page = adw::StatusPage::builder()
             .icon_name("view-grid-symbolic")
@@ -137,6 +173,9 @@ impl SimpleComponent for InstalledModel {
         list_scroll.set_child(Some(&list_clamp));
         content_stack.add_named(&list_scroll, Some("list"));
 
+        // Detail page
+        content_stack.add_named(detail.widget(), Some("detail"));
+
         content_stack.set_visible_child_name("loading");
         content_stack.set_vexpand(true);
 
@@ -144,6 +183,7 @@ impl SimpleComponent for InstalledModel {
             handle: services.handle,
             manage: services.manage,
             extensions,
+            detail,
             content_stack: content_stack.clone(),
             has_extensions: false,
             is_loading: true,
@@ -151,10 +191,8 @@ impl SimpleComponent for InstalledModel {
 
         let widgets = view_output!();
 
-        // Append the pre-built stack to the root box
         root.append(&content_stack);
 
-        // Trigger initial load
         sender.input(InstalledMsg::Refresh);
 
         ComponentParts { model, widgets }
@@ -195,6 +233,7 @@ impl SimpleComponent for InstalledModel {
                         uuid: ext.uuid.as_str().to_owned(),
                         creator: ext.creator,
                         description: ext.description,
+                        screenshot_url: ext.screenshot_url,
                         state: ext.state,
                         mode: RowMode::Installed,
                     });
@@ -204,8 +243,9 @@ impl SimpleComponent for InstalledModel {
                 self.is_loading = false;
                 self.has_extensions = false;
                 self.update_stack();
-                tracing::warn!("load failed: {err}");
-                let _ = sender.output(InstalledOutput::Toast(format!("Failed to load extensions: {err}")));
+                let _ = sender.output(InstalledOutput::Toast(format!(
+                    "Failed to load extensions: {err}"
+                )));
             }
             InstalledMsg::ToggleExtension(uuid, enabled) => {
                 tracing::info!("toggling {uuid} to {enabled}");
@@ -216,12 +256,9 @@ impl SimpleComponent for InstalledModel {
                 self.handle.spawn(async move {
                     match manage.toggle_extension(&uuid_clone, enabled).await {
                         Ok(()) => {
-                            tracing::info!("{uuid_clone} toggled to {enabled}");
-                            input_sender
-                                .emit(InstalledMsg::ToggleComplete(uuid_clone, enabled));
+                            input_sender.emit(InstalledMsg::ToggleComplete(uuid_clone, enabled));
                         }
                         Err(e) => {
-                            tracing::error!("toggle failed: {e}");
                             input_sender.emit(InstalledMsg::ToggleFailed(e.to_string()));
                         }
                     }
@@ -232,8 +269,28 @@ impl SimpleComponent for InstalledModel {
                 tracing::info!("{uuid} {state}");
             }
             InstalledMsg::ToggleFailed(err) => {
-                tracing::warn!("toggle error: {err}");
                 let _ = sender.output(InstalledOutput::Toast(format!("Toggle failed: {err}")));
+            }
+            InstalledMsg::ShowDetail {
+                name,
+                uuid,
+                creator,
+                description,
+                screenshot_url,
+                installed,
+            } => {
+                self.detail.emit(DetailViewMsg::Show(DetailItem::Extension {
+                    name,
+                    creator,
+                    uuid,
+                    description,
+                    screenshot_url,
+                    installed,
+                }));
+                self.content_stack.set_visible_child_name("detail");
+            }
+            InstalledMsg::DetailBack => {
+                self.update_stack();
             }
         }
     }

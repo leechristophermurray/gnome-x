@@ -18,8 +18,8 @@ pub struct ExtensionRowModel {
     name: String,
     uuid: String,
     creator: String,
-    #[allow(dead_code)]
     description: String,
+    screenshot_url: Option<String>,
     state: ExtensionState,
     mode: RowMode,
 }
@@ -29,6 +29,7 @@ pub struct ExtensionRowInit {
     pub uuid: String,
     pub creator: String,
     pub description: String,
+    pub screenshot_url: Option<String>,
     pub state: ExtensionState,
     pub mode: RowMode,
 }
@@ -36,12 +37,21 @@ pub struct ExtensionRowInit {
 #[derive(Debug)]
 pub enum ExtensionRowMsg {
     ToggleEnabled(bool),
+    Activated,
 }
 
 #[derive(Debug)]
 pub enum ExtensionRowOutput {
     Install(ExtensionUuid),
     Toggle(ExtensionUuid, bool),
+    ShowDetail {
+        name: String,
+        uuid: String,
+        creator: String,
+        description: String,
+        screenshot_url: Option<String>,
+        installed: bool,
+    },
 }
 
 #[relm4::factory(pub)]
@@ -56,6 +66,8 @@ impl FactoryComponent for ExtensionRowModel {
         adw::ActionRow {
             set_title: &self.name,
             set_subtitle: &format!("by {} \u{2014} {}", self.creator, self.uuid),
+            set_activatable: true,
+            connect_activated => ExtensionRowMsg::Activated,
 
             add_suffix = &gtk::Box {
                 set_spacing: 8,
@@ -87,6 +99,11 @@ impl FactoryComponent for ExtensionRowModel {
                         glib::Propagation::Proceed
                     },
                 },
+
+                gtk::Image {
+                    set_icon_name: Some("go-next-symbolic"),
+                    add_css_class: "dim-label",
+                },
             },
         }
     }
@@ -97,6 +114,7 @@ impl FactoryComponent for ExtensionRowModel {
             uuid: init.uuid,
             creator: init.creator,
             description: init.description,
+            screenshot_url: init.screenshot_url,
             state: init.state,
             mode: init.mode,
         }
@@ -117,6 +135,16 @@ impl FactoryComponent for ExtensionRowModel {
                         };
                     }
                 }
+            }
+            ExtensionRowMsg::Activated => {
+                let _ = sender.output(ExtensionRowOutput::ShowDetail {
+                    name: self.name.clone(),
+                    uuid: self.uuid.clone(),
+                    creator: self.creator.clone(),
+                    description: self.description.clone(),
+                    screenshot_url: self.screenshot_url.clone(),
+                    installed: self.state != ExtensionState::Available,
+                });
             }
         }
     }
