@@ -8,6 +8,7 @@ use crate::components::explore::ExploreModel;
 use crate::components::installed::InstalledModel;
 use crate::components::packs::PacksModel;
 use crate::components::settings::SettingsModel;
+use crate::services::AppServices;
 use adw::prelude::*;
 use relm4::prelude::*;
 
@@ -23,7 +24,7 @@ pub enum AppMsg {}
 
 #[relm4::component(pub)]
 impl SimpleComponent for AppModel {
-    type Init = ();
+    type Init = AppServices;
     type Input = AppMsg;
     type Output = ();
 
@@ -53,22 +54,22 @@ impl SimpleComponent for AppModel {
         }
     }
 
-    fn init(_: (), root: Self::Root, _sender: ComponentSender<Self>) -> ComponentParts<Self> {
+    fn init(
+        services: AppServices,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
         let explore = ExploreModel::builder()
-            .launch(())
+            .launch(services.clone())
             .detach();
 
         let installed = InstalledModel::builder()
-            .launch(())
+            .launch(services.clone())
             .detach();
 
-        let packs = PacksModel::builder()
-            .launch(())
-            .detach();
+        let packs = PacksModel::builder().launch(()).detach();
 
-        let settings = SettingsModel::builder()
-            .launch(())
-            .detach();
+        let settings = SettingsModel::builder().launch(()).detach();
 
         let model = AppModel {
             explore,
@@ -79,8 +80,6 @@ impl SimpleComponent for AppModel {
 
         let widgets = view_output!();
 
-        // Add pages to ViewStack programmatically (Relm4 view! macro doesn't
-        // support add_titled_with_icon directly)
         let stack = &widgets.view_stack;
         stack.add_titled_with_icon(
             model.explore.widget(),

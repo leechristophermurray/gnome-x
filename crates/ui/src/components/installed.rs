@@ -5,12 +5,18 @@
 //! HIG pattern: boxed-list with AdwActionRow, AdwStatusPage for empty state.
 
 use crate::components::extension_row::{ExtensionRowInit, ExtensionRowModel, ExtensionRowOutput};
+use crate::services::AppServices;
 use adw::prelude::*;
+use gnomex_app::use_cases::ManageUseCase;
 use gnomex_domain::{Extension, ExtensionUuid};
 use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
+use std::sync::Arc;
+use tokio::runtime::Handle;
 
 pub struct InstalledModel {
+    handle: Handle,
+    manage: Arc<ManageUseCase>,
     extensions: FactoryVecDeque<ExtensionRowModel>,
     has_extensions: bool,
     is_loading: bool,
@@ -20,7 +26,10 @@ pub struct InstalledModel {
 pub enum InstalledMsg {
     Refresh,
     Loaded(Vec<Extension>),
+    LoadFailed(String),
     ToggleExtension(ExtensionUuid, bool),
+    ToggleComplete(ExtensionUuid, bool),
+    ToggleFailed(String),
 }
 
 #[derive(Debug)]
@@ -28,7 +37,7 @@ pub enum InstalledOutput {}
 
 #[relm4::component(pub)]
 impl SimpleComponent for InstalledModel {
-    type Init = ();
+    type Init = AppServices;
     type Input = InstalledMsg;
     type Output = InstalledOutput;
 
@@ -50,7 +59,11 @@ impl SimpleComponent for InstalledModel {
         }
     }
 
-    fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+    fn init(
+        services: AppServices,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
         let extensions =
             FactoryVecDeque::builder()
                 .launch(gtk::ListBox::default())
@@ -62,6 +75,8 @@ impl SimpleComponent for InstalledModel {
                 });
 
         let model = InstalledModel {
+            handle: services.handle,
+            manage: services.manage,
             extensions,
             has_extensions: false,
             is_loading: false,
@@ -134,11 +149,21 @@ impl SimpleComponent for InstalledModel {
         match msg {
             InstalledMsg::Refresh => {
                 self.is_loading = true;
-                // In production, calls ManageUseCase::list_installed_extensions
+
+                let manage = self.manage.clone();
                 let input_sender = sender.input_sender().clone();
-                relm4::spawn(async move {
+                self.handle.spawn(async move {
                     tracing::info!("loading installed extensions via D-Bus");
-                    input_sender.emit(InstalledMsg::Loaded(vec![]));
+                    match manage.list_installed_extensions().await {
+                        Ok(extensions) => {
+                            tracing::info!("found {} installed extensions", extensions.len());
+                            input_sender.emit(InstalledMsg::Loaded(extensions));
+                        }
+                        Err(e) => {
+                            tracing::error!("failed to list extensions: {e}");
+                            input_sender.emit(InstalledMsg::LoadFailed(e.to_string()));
+                        }
+                    }
                 });
             }
             InstalledMsg::Loaded(extensions) => {
@@ -157,8 +182,39 @@ impl SimpleComponent for InstalledModel {
                     });
                 }
             }
+            InstalledMsg::LoadFailed(err) => {
+                self.is_loading = false;
+                self.has_extensions = false;
+                tracing::warn!("load failed: {err}");
+            }
             InstalledMsg::ToggleExtension(uuid, enabled) => {
-                tracing::info!("toggle {uuid} \u{2192} {enabled}");
+                tracing::info!("toggling {uuid} to {enabled}");
+
+                let manage = self.manage.clone();
+                let input_sender = sender.input_sender().clone();
+                let uuid_clone = uuid.clone();
+                self.handle.spawn(async move {
+                    match manage.toggle_extension(&uuid_clone, enabled).await {
+                        Ok(()) => {
+                            tracing::info!("{uuid_clone} toggled to {enabled}");
+                            input_sender
+                                .emit(InstalledMsg::ToggleComplete(uuid_clone, enabled));
+                        }
+                        Err(e) => {
+                            tracing::error!("toggle failed: {e}");
+                            input_sender.emit(InstalledMsg::ToggleFailed(e.to_string()));
+                        }
+                    }
+                });
+            }
+            InstalledMsg::ToggleComplete(uuid, enabled) => {
+                let state = if enabled { "enabled" } else { "disabled" };
+                tracing::info!("{uuid} {state}");
+                // TODO: show AdwToast confirmation
+            }
+            InstalledMsg::ToggleFailed(err) => {
+                tracing::warn!("toggle error: {err}");
+                // TODO: show AdwToast error, refresh list to restore state
             }
         }
     }
