@@ -7,8 +7,10 @@
 //! the UI layer. It is threaded through component Init params so that
 //! every view can spawn async work on the tokio runtime.
 
-use gnomex_app::use_cases::{BrowseUseCase, ManageUseCase};
-use gnomex_infra::{DbusShellProxy, EgoClient, FilesystemInstaller};
+use gnomex_app::use_cases::{BrowseUseCase, CustomizeUseCase, ManageUseCase};
+use gnomex_infra::{
+    DbusShellProxy, EgoClient, FilesystemInstaller, GSettingsAppearance, OcsClient,
+};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 
@@ -18,6 +20,7 @@ pub struct AppServices {
     pub handle: Handle,
     pub browse: Arc<BrowseUseCase>,
     pub manage: Arc<ManageUseCase>,
+    pub customize: Arc<CustomizeUseCase>,
 }
 
 impl AppServices {
@@ -25,7 +28,9 @@ impl AppServices {
         // --- Composition Root: wire concrete adapters to ports ---
 
         let ego_client: Arc<EgoClient> = Arc::new(EgoClient::new());
+        let ocs_client: Arc<OcsClient> = Arc::new(OcsClient::new());
         let installer: Arc<FilesystemInstaller> = Arc::new(FilesystemInstaller::new());
+        let appearance: Arc<GSettingsAppearance> = Arc::new(GSettingsAppearance::new());
 
         // D-Bus proxy requires an async connection. Create it lazily on first
         // use via a wrapper that blocks on the handle. For now, block here.
@@ -41,12 +46,15 @@ impl AppServices {
             shell_proxy.clone(),
         ));
 
-        let manage = Arc::new(ManageUseCase::new(installer, shell_proxy));
+        let manage = Arc::new(ManageUseCase::new(installer.clone(), shell_proxy));
+
+        let customize = Arc::new(CustomizeUseCase::new(ocs_client, installer, appearance));
 
         Self {
             handle,
             browse,
             manage,
+            customize,
         }
     }
 }

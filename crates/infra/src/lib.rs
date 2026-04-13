@@ -10,9 +10,13 @@
 mod dbus_shell_proxy;
 mod ego_client;
 mod filesystem_installer;
+mod gsettings_appearance;
+mod ocs_client;
 mod pack_toml_storage;
 
 pub use dbus_shell_proxy::DbusShellProxy;
 pub use ego_client::EgoClient;
 pub use filesystem_installer::FilesystemInstaller;
+pub use gsettings_appearance::GSettingsAppearance;
+pub use ocs_client::OcsClient;
 pub use pack_toml_storage::PackTomlStorage;
