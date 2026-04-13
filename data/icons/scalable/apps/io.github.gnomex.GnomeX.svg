@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <!-- Subtle shadows for depth -->
+    <filter id="shadow" x="-5%" y="-5%" width="115%" height="115%">
+      <feDropShadow dx="1" dy="2" stdDeviation="2" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- === Three stacked rounded squares === -->
+
+  <!-- Back card (dark slate blue, rotated left) -->
+  <rect x="14" y="18" width="92" height="92" rx="22" ry="22"
+        fill="#5c7591" transform="rotate(-8 60 64)" filter="url(#shadow)"/>
+
+  <!-- Middle card (medium blue, slight right rotation) -->
+  <rect x="18" y="16" width="92" height="92" rx="22" ry="22"
+        fill="#4b7fb5" transform="rotate(3 64 62)" filter="url(#shadow)"/>
+
+  <!-- Front card (light blue) -->
+  <rect x="20" y="14" width="90" height="90" rx="20" ry="20"
+        fill="#7fb1d8" filter="url(#shadow)"/>
+
+  <!-- === G letterform (paper-cut layered style) === -->
+
+  <!-- G outer body — large C arc, thick (darker grey) -->
+  <path d="M 86 56
+           A 30 30 0 1 0 62 94
+           C 58 94 55 91 55 87
+           L 55 82
+           A 20 20 0 1 1 76 56
+           Z"
+        fill="#8a95a0" filter="url(#shadow)"/>
+
+  <!-- G inner white space (center hole) -->
+  <circle cx="62" cy="64" r="13" fill="#ffffff"/>
+
+  <!-- G horizontal bar (the stroke that makes C into G) -->
+  <rect x="62" y="56" width="24" height="14" rx="7" ry="7"
+        fill="#727e8a" filter="url(#shadow)"/>
+
+  <!-- Mauve/grey connector piece (where bar meets arc) -->
+  <rect x="74" y="58" width="12" height="10" rx="5" ry="5"
+        fill="#9a8f9a" opacity="0.7"/>
+
+  <!-- G inner ring accent (subtle depth) -->
+  <circle cx="62" cy="64" r="7" fill="none" stroke="#b8c2cc" stroke-width="2.5" opacity="0.5"/>
+
+  <!-- === Accent dot (the distinctive blue dot) === -->
+  <circle cx="48" cy="38" r="6" fill="#6ba3cc" filter="url(#shadow)"/>
+</svg>

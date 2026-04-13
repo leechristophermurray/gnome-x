@@ -1,0 +1,23 @@
+[Icon Theme]
+Name=gnomex
+Comment=GNOME X application icons
+Directories=scalable/apps;symbolic/apps;128x128/apps
+
+[scalable/apps]
+Size=128
+MinSize=16
+MaxSize=512
+Type=Scalable
+Context=Applications
+
+[symbolic/apps]
+Size=16
+MinSize=8
+MaxSize=64
+Type=Scalable
+Context=Applications
+
+[128x128/apps]
+Size=128
+Type=Fixed
+Context=Applications

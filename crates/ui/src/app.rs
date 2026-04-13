@@ -37,7 +37,8 @@ impl SimpleComponent for AppModel {
 
     view! {
         adw::ApplicationWindow {
-            set_title: Some("Experience"),
+            set_title: Some("GNOME X"),
+            set_icon_name: Some("io.github.gnomex.GnomeX"),
             set_default_size: (900, 640),
         }
     }

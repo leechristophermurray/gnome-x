@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- Symbolic icon: simplified G in a rounded square -->
+  <rect x="1" y="1" width="14" height="14" rx="3.5" ry="3.5"
+        fill="none" stroke="currentColor" stroke-width="1.2"/>
+
+  <!-- G outer arc -->
+  <path d="M 11 8 A 3.5 3.5 0 1 0 8 11.5
+           L 8 10 A 2 2 0 1 1 9.5 8 Z"
+        fill="currentColor"/>
+
+  <!-- G bar -->
+  <rect x="8" y="7" width="3" height="1.8" rx="0.9" ry="0.9"
+        fill="currentColor"/>
+
+  <!-- Accent dot -->
+  <circle cx="6" cy="5" r="0.9" fill="currentColor"/>
+</svg>

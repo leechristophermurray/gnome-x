@@ -14,6 +14,7 @@ mod components;
 mod services;
 
 use app::AppModel;
+use gio::prelude::*;
 use services::AppServices;
 
 const APP_ID: &str = "io.github.gnomex.GnomeX";
@@ -38,6 +39,27 @@ fn main() {
 
     let services = AppServices::new(runtime.handle().clone());
 
-    let app = relm4::RelmApp::new(APP_ID);
+    let app = adw::Application::builder()
+        .application_id(APP_ID)
+        .build();
+
+    // Register bundled icons after GTK display is available.
+    app.connect_startup(|_| {
+        if let Some(display) = gtk::gdk::Display::default() {
+            let icon_theme = gtk::IconTheme::for_display(&display);
+            let icons_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../data/icons");
+            if let Some(path_str) = icons_path
+                .canonicalize()
+                .ok()
+                .and_then(|p| p.to_str().map(String::from))
+            {
+                icon_theme.add_search_path(&path_str);
+                tracing::debug!("added icon search path: {path_str}");
+            }
+        }
+    });
+
+    let app = relm4::RelmApp::from_app(app);
     app.run::<AppModel>(services);
 }

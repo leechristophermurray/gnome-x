@@ -3,4 +3,10 @@
   <gresource prefix="/io/github/gnomex/GnomeX">
     <file>style.css</file>
   </gresource>
+  <gresource prefix="/io/github/gnomex/GnomeX/icons/scalable/apps">
+    <file preprocess="xml-stripblanks" alias="io.github.gnomex.GnomeX.svg">../../icons/scalable/apps/io.github.gnomex.GnomeX.svg</file>
+  </gresource>
+  <gresource prefix="/io/github/gnomex/GnomeX/icons/symbolic/apps">
+    <file preprocess="xml-stripblanks" alias="io.github.gnomex.GnomeX-symbolic.svg">../../icons/symbolic/apps/io.github.gnomex.GnomeX-symbolic.svg</file>
+  </gresource>
 </gresources>
