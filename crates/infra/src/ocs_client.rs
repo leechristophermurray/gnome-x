@@ -159,6 +159,64 @@ impl ContentRepository for OcsClient {
 
         Ok(bytes.to_vec())
     }
+
+    async fn list_popular(
+        &self,
+        category: ContentCategory,
+        page: u32,
+    ) -> Result<SearchResult<ContentItem>, AppError> {
+        self.query_sorted("high", category, page).await
+    }
+
+    async fn list_recent(
+        &self,
+        category: ContentCategory,
+        page: u32,
+    ) -> Result<SearchResult<ContentItem>, AppError> {
+        self.query_sorted("new", category, page).await
+    }
+}
+
+impl OcsClient {
+    async fn query_sorted(
+        &self,
+        sortmode: &str,
+        category: ContentCategory,
+        page: u32,
+    ) -> Result<SearchResult<ContentItem>, AppError> {
+        let url = format!(
+            "{OCS_BASE}/content/data?categories={cat}&sortmode={sortmode}&page={page}&pagesize={PAGE_SIZE}&format=json",
+            cat = category.ocs_id(),
+            page = page.max(1) - 1,
+        );
+
+        tracing::debug!("OCS {sortmode}: {url}");
+
+        let resp: OcsResponse = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| AppError::Repository(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| AppError::Repository(e.to_string()))?;
+
+        let total = resp.totalitems;
+        let per_page = resp.itemsperpage.max(1);
+        let pages = (total + per_page - 1) / per_page;
+
+        Ok(SearchResult {
+            items: resp
+                .data
+                .iter()
+                .map(|e| ocs_entry_to_domain(e, category))
+                .collect(),
+            total,
+            page,
+            pages,
+        })
+    }
 }
 
 /// Minimal percent-encoding for URL query parameters.

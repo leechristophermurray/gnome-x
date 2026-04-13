@@ -226,6 +226,57 @@ impl ExtensionRepository for EgoClient {
 
         Ok(bytes.to_vec())
     }
+
+    async fn list_popular(
+        &self,
+        shell_version: &ShellVersion,
+        page: u32,
+    ) -> Result<SearchResult<Extension>, AppError> {
+        self.query_sorted("popularity", shell_version, page).await
+    }
+
+    async fn list_recent(
+        &self,
+        shell_version: &ShellVersion,
+        page: u32,
+    ) -> Result<SearchResult<Extension>, AppError> {
+        self.query_sorted("recent", shell_version, page).await
+    }
+}
+
+impl EgoClient {
+    async fn query_sorted(
+        &self,
+        sort: &str,
+        shell_version: &ShellVersion,
+        page: u32,
+    ) -> Result<SearchResult<Extension>, AppError> {
+        let url = format!(
+            "{EGO_BASE}/extension-query/?sort={sort}&shell_version={shell}&page={page}",
+            sort = sort,
+            shell = shell_version.major,
+            page = page,
+        );
+
+        tracing::debug!("EGO {sort}: {url}");
+
+        let resp: EgoSearchResponse = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| AppError::Repository(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| AppError::Repository(e.to_string()))?;
+
+        Ok(SearchResult {
+            items: resp.extensions.iter().map(search_result_to_domain).collect(),
+            total: resp.total,
+            page,
+            pages: resp.numpages,
+        })
+    }
 }
 
 /// Minimal percent-encoding for URL query parameters.

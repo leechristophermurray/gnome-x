@@ -4,23 +4,30 @@
 //! Main application component — owns the AdwViewSwitcher navigation and
 //! top-level page switching between Explore, Installed, Packs, and Settings.
 
-use crate::components::explore::ExploreModel;
-use crate::components::installed::InstalledModel;
-use crate::components::packs::PacksModel;
+use crate::components::explore::{ExploreModel, ExploreOutput};
+use crate::components::installed::{InstalledModel, InstalledOutput};
+use crate::components::packs::{PacksModel, PacksOutput};
 use crate::components::settings::SettingsModel;
 use crate::services::AppServices;
 use adw::prelude::*;
 use relm4::prelude::*;
 
 pub struct AppModel {
+    #[allow(dead_code)]
     explore: Controller<ExploreModel>,
+    #[allow(dead_code)]
     installed: Controller<InstalledModel>,
+    #[allow(dead_code)]
     packs: Controller<PacksModel>,
+    #[allow(dead_code)]
     settings: Controller<SettingsModel>,
+    toast_overlay: adw::ToastOverlay,
 }
 
 #[derive(Debug)]
-pub enum AppMsg {}
+pub enum AppMsg {
+    Toast(String),
+}
 
 #[relm4::component(pub)]
 impl SimpleComponent for AppModel {
@@ -32,80 +39,102 @@ impl SimpleComponent for AppModel {
         adw::ApplicationWindow {
             set_title: Some("Experience"),
             set_default_size: (900, 640),
-
-            #[wrap(Some)]
-            set_content = &adw::ToolbarView {
-                add_top_bar = &adw::HeaderBar {
-                    #[wrap(Some)]
-                    set_title_widget = &adw::ViewSwitcher {
-                        set_stack: Some(&view_stack),
-                        set_policy: adw::ViewSwitcherPolicy::Wide,
-                    },
-                },
-
-                add_bottom_bar = &adw::ViewSwitcherBar {
-                    set_stack: Some(&view_stack),
-                },
-
-                #[wrap(Some)]
-                #[name = "view_stack"]
-                set_content = &adw::ViewStack {},
-            },
         }
     }
 
     fn init(
         services: AppServices,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let explore = ExploreModel::builder()
             .launch(services.clone())
-            .detach();
+            .forward(sender.input_sender(), |msg| match msg {
+                ExploreOutput::Toast(s) => AppMsg::Toast(s),
+            });
 
         let installed = InstalledModel::builder()
             .launch(services.clone())
-            .detach();
+            .forward(sender.input_sender(), |msg| match msg {
+                InstalledOutput::Toast(s) => AppMsg::Toast(s),
+            });
 
-        let packs = PacksModel::builder().launch(()).detach();
+        let packs = PacksModel::builder()
+            .launch(services.clone())
+            .forward(sender.input_sender(), |msg| match msg {
+                PacksOutput::Toast(s) => AppMsg::Toast(s),
+            });
 
         let settings = SettingsModel::builder().launch(()).detach();
+
+        // Build the layout with ToastOverlay wrapping ToolbarView
+        let toast_overlay = adw::ToastOverlay::new();
+
+        let toolbar_view = adw::ToolbarView::new();
+
+        let view_stack = adw::ViewStack::new();
+
+        let header = adw::HeaderBar::new();
+        let switcher = adw::ViewSwitcher::new();
+        switcher.set_stack(Some(&view_stack));
+        switcher.set_policy(adw::ViewSwitcherPolicy::Wide);
+        header.set_title_widget(Some(&switcher));
+        toolbar_view.add_top_bar(&header);
+
+        let bottom_bar = adw::ViewSwitcherBar::new();
+        bottom_bar.set_stack(Some(&view_stack));
+        toolbar_view.add_bottom_bar(&bottom_bar);
+
+        toolbar_view.set_content(Some(&view_stack));
+
+        toast_overlay.set_child(Some(&toolbar_view));
+        root.set_content(Some(&toast_overlay));
+
+        view_stack.add_titled_with_icon(
+            explore.widget(),
+            Some("explore"),
+            "Explore",
+            "system-search-symbolic",
+        );
+        view_stack.add_titled_with_icon(
+            installed.widget(),
+            Some("installed"),
+            "Installed",
+            "view-grid-symbolic",
+        );
+        view_stack.add_titled_with_icon(
+            packs.widget(),
+            Some("packs"),
+            "Packs",
+            "package-x-generic-symbolic",
+        );
+        view_stack.add_titled_with_icon(
+            settings.widget(),
+            Some("settings"),
+            "Settings",
+            "emblem-system-symbolic",
+        );
 
         let model = AppModel {
             explore,
             installed,
             packs,
             settings,
+            toast_overlay: toast_overlay.clone(),
         };
 
         let widgets = view_output!();
 
-        let stack = &widgets.view_stack;
-        stack.add_titled_with_icon(
-            model.explore.widget(),
-            Some("explore"),
-            "Explore",
-            "system-search-symbolic",
-        );
-        stack.add_titled_with_icon(
-            model.installed.widget(),
-            Some("installed"),
-            "Installed",
-            "view-grid-symbolic",
-        );
-        stack.add_titled_with_icon(
-            model.packs.widget(),
-            Some("packs"),
-            "Packs",
-            "package-x-generic-symbolic",
-        );
-        stack.add_titled_with_icon(
-            model.settings.widget(),
-            Some("settings"),
-            "Settings",
-            "emblem-system-symbolic",
-        );
-
         ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, msg: AppMsg, _sender: ComponentSender<Self>) {
+        match msg {
+            AppMsg::Toast(text) => {
+                let toast = adw::Toast::new(&text);
+                toast.set_timeout(3);
+                self.toast_overlay.add_toast(toast);
+            }
+        }
     }
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Explore view — unified search across extensions, themes, icons, and cursors.
-//! HIG pattern: linked toggle-button category bar, SearchEntry, boxed-list results.
+//! Shows popular/recent landing content when idle, search results when active.
 
 use crate::components::content_row::{ContentRowInit, ContentRowModel, ContentRowOutput};
 use crate::components::extension_row::{
@@ -17,7 +17,6 @@ use relm4::prelude::*;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 
-/// Which kind of content the user is searching for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExploreCategory {
     Extensions,
@@ -34,6 +33,10 @@ pub struct ExploreModel {
     content_results: FactoryVecDeque<ContentRowModel>,
     content_stack: gtk::Stack,
     results_stack: gtk::Stack,
+    // Landing page widgets
+    popular_ext_list: gtk::ListBox,
+    recent_ext_list: gtk::ListBox,
+    popular_themes_list: gtk::ListBox,
     is_loading: bool,
     has_results: bool,
 }
@@ -45,7 +48,7 @@ impl ExploreModel {
         } else if self.has_results {
             "results"
         } else {
-            "empty"
+            "landing"
         };
         self.content_stack.set_visible_child_name(name);
     }
@@ -65,22 +68,28 @@ pub enum ExploreMsg {
     SetCategory(ExploreCategory),
     SearchChanged(String),
     SearchActivated,
-    // Extension results
+    // Landing data
+    LoadLanding,
+    LandingPopularExt(Vec<Extension>),
+    LandingRecentExt(Vec<Extension>),
+    LandingPopularThemes(Vec<ContentItem>),
+    // Search results
     LoadExtensions(Vec<Extension>),
+    LoadContent(Vec<ContentItem>),
+    // Actions
     InstallExtension(ExtensionUuid),
     InstallExtComplete(ExtensionUuid),
-    // Content results
-    LoadContent(Vec<ContentItem>),
     InstallContent(ContentId, u64, String),
     InstallContentComplete(String),
     ApplyContent(String),
-    // Shared
     SearchFailed(String),
     ActionFailed(String),
 }
 
 #[derive(Debug)]
-pub enum ExploreOutput {}
+pub enum ExploreOutput {
+    Toast(String),
+}
 
 #[relm4::component(pub)]
 impl SimpleComponent for ExploreModel {
@@ -176,16 +185,67 @@ impl SimpleComponent for ExploreModel {
             category_box.append(&btn);
         }
 
-        // Content stack (empty / loading / results)
+        // Content stack
         let content_stack = gtk::Stack::new();
 
-        let empty_page = adw::StatusPage::builder()
-            .icon_name("system-search-symbolic")
-            .title("Explore")
-            .description("Search for extensions, themes, icons, and cursors")
+        // --- Landing page ---
+        let landing_scroll = gtk::ScrolledWindow::builder().vexpand(true).build();
+        let landing_clamp = adw::Clamp::builder()
+            .maximum_size(600)
+            .margin_top(12)
+            .margin_bottom(24)
+            .margin_start(12)
+            .margin_end(12)
             .build();
-        content_stack.add_named(&empty_page, Some("empty"));
+        let landing_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(24)
+            .build();
 
+        // Popular extensions section
+        let popular_ext_label = gtk::Label::builder()
+            .label("Popular Extensions")
+            .halign(gtk::Align::Start)
+            .css_classes(["title-3"])
+            .build();
+        let popular_ext_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["boxed-list"])
+            .build();
+        landing_box.append(&popular_ext_label);
+        landing_box.append(&popular_ext_list);
+
+        // Recently updated extensions section
+        let recent_ext_label = gtk::Label::builder()
+            .label("Recently Updated")
+            .halign(gtk::Align::Start)
+            .css_classes(["title-3"])
+            .build();
+        let recent_ext_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["boxed-list"])
+            .build();
+        landing_box.append(&recent_ext_label);
+        landing_box.append(&recent_ext_list);
+
+        // Popular themes section
+        let popular_themes_label = gtk::Label::builder()
+            .label("Popular Themes")
+            .halign(gtk::Align::Start)
+            .css_classes(["title-3"])
+            .build();
+        let popular_themes_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["boxed-list"])
+            .build();
+        landing_box.append(&popular_themes_label);
+        landing_box.append(&popular_themes_list);
+
+        landing_clamp.set_child(Some(&landing_box));
+        landing_scroll.set_child(Some(&landing_clamp));
+        content_stack.add_named(&landing_scroll, Some("landing"));
+
+        // --- Loading page ---
         let loading_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .valign(gtk::Align::Center)
@@ -205,11 +265,10 @@ impl SimpleComponent for ExploreModel {
         loading_box.append(&loading_label);
         content_stack.add_named(&loading_box, Some("loading"));
 
-        // Results page contains a sub-stack switching between extension list and content list
+        // --- Results page ---
         let results_stack = gtk::Stack::new();
         results_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
 
-        // Extension results scroll
         let ext_scroll = gtk::ScrolledWindow::builder().vexpand(true).build();
         let ext_clamp = adw::Clamp::builder()
             .maximum_size(600)
@@ -227,7 +286,6 @@ impl SimpleComponent for ExploreModel {
         ext_scroll.set_child(Some(&ext_clamp));
         results_stack.add_named(&ext_scroll, Some("extensions"));
 
-        // Content results scroll
         let content_scroll = gtk::ScrolledWindow::builder().vexpand(true).build();
         let content_clamp = adw::Clamp::builder()
             .maximum_size(600)
@@ -248,7 +306,7 @@ impl SimpleComponent for ExploreModel {
         results_stack.set_visible_child_name("extensions");
         content_stack.add_named(&results_stack, Some("results"));
 
-        content_stack.set_visible_child_name("empty");
+        content_stack.set_visible_child_name("landing");
         content_stack.set_vexpand(true);
 
         let model = ExploreModel {
@@ -261,21 +319,64 @@ impl SimpleComponent for ExploreModel {
             content_results,
             content_stack: content_stack.clone(),
             results_stack: results_stack.clone(),
+            popular_ext_list: popular_ext_list.clone(),
+            recent_ext_list: recent_ext_list.clone(),
+            popular_themes_list: popular_themes_list.clone(),
             is_loading: false,
             has_results: false,
         };
 
         let widgets = view_output!();
 
-        // Insert category bar between the search box and the content stack
         root.insert_child_after(&category_box, root.first_child().as_ref());
         root.append(&content_stack);
+
+        // Kick off landing data load
+        sender.input(ExploreMsg::LoadLanding);
 
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, msg: ExploreMsg, sender: ComponentSender<Self>) {
         match msg {
+            ExploreMsg::LoadLanding => {
+                // Fire three parallel requests for landing content
+                let browse = self.browse.clone();
+                let sender1 = sender.input_sender().clone();
+                self.handle.spawn(async move {
+                    if let Ok(result) = browse.list_popular().await {
+                        let items: Vec<_> = result.items.into_iter().take(8).collect();
+                        sender1.emit(ExploreMsg::LandingPopularExt(items));
+                    }
+                });
+
+                let browse2 = self.browse.clone();
+                let sender2 = sender.input_sender().clone();
+                self.handle.spawn(async move {
+                    if let Ok(result) = browse2.list_recent().await {
+                        let items: Vec<_> = result.items.into_iter().take(8).collect();
+                        sender2.emit(ExploreMsg::LandingRecentExt(items));
+                    }
+                });
+
+                let customize = self.customize.clone();
+                let sender3 = sender.input_sender().clone();
+                self.handle.spawn(async move {
+                    if let Ok(result) = customize.list_popular(ContentCategory::GtkTheme).await {
+                        let items: Vec<_> = result.items.into_iter().take(8).collect();
+                        sender3.emit(ExploreMsg::LandingPopularThemes(items));
+                    }
+                });
+            }
+            ExploreMsg::LandingPopularExt(extensions) => {
+                populate_ext_landing_list(&self.popular_ext_list, &extensions);
+            }
+            ExploreMsg::LandingRecentExt(extensions) => {
+                populate_ext_landing_list(&self.recent_ext_list, &extensions);
+            }
+            ExploreMsg::LandingPopularThemes(items) => {
+                populate_content_landing_list(&self.popular_themes_list, &items);
+            }
             ExploreMsg::SetCategory(cat) => {
                 self.category = cat;
                 self.show_result_list();
@@ -309,13 +410,11 @@ impl SimpleComponent for ExploreModel {
                     ExploreCategory::Extensions => {
                         let browse = self.browse.clone();
                         self.handle.spawn(async move {
-                            tracing::info!("searching extensions: {query}");
                             match browse.search_extensions(&query, 1).await {
                                 Ok(result) => {
                                     input_sender.emit(ExploreMsg::LoadExtensions(result.items));
                                 }
                                 Err(e) => {
-                                    tracing::error!("search failed: {e}");
                                     input_sender.emit(ExploreMsg::SearchFailed(e.to_string()));
                                 }
                             }
@@ -324,13 +423,11 @@ impl SimpleComponent for ExploreModel {
                     ExploreCategory::Content(category) => {
                         let customize = self.customize.clone();
                         self.handle.spawn(async move {
-                            tracing::info!("searching {category:?}: {query}");
                             match customize.search_content(&query, category, 1).await {
                                 Ok(result) => {
                                     input_sender.emit(ExploreMsg::LoadContent(result.items));
                                 }
                                 Err(e) => {
-                                    tracing::error!("search failed: {e}");
                                     input_sender.emit(ExploreMsg::SearchFailed(e.to_string()));
                                 }
                             }
@@ -378,9 +475,9 @@ impl SimpleComponent for ExploreModel {
                 self.has_results = false;
                 self.update_stack();
                 tracing::warn!("search error: {err}");
+                let _ = sender.output(ExploreOutput::Toast(format!("Search failed: {err}")));
             }
             ExploreMsg::InstallExtension(uuid) => {
-                tracing::info!("installing extension: {uuid}");
                 let browse = self.browse.clone();
                 let input_sender = sender.input_sender().clone();
                 let uuid_clone = uuid.clone();
@@ -390,17 +487,15 @@ impl SimpleComponent for ExploreModel {
                             input_sender.emit(ExploreMsg::InstallExtComplete(uuid_clone));
                         }
                         Err(e) => {
-                            tracing::error!("install failed: {e}");
                             input_sender.emit(ExploreMsg::ActionFailed(e.to_string()));
                         }
                     }
                 });
             }
             ExploreMsg::InstallExtComplete(uuid) => {
-                tracing::info!("extension {uuid} installed");
+                let _ = sender.output(ExploreOutput::Toast(format!("Installed {uuid}")));
             }
             ExploreMsg::InstallContent(id, file_id, name) => {
-                tracing::info!("installing content: {name}");
                 let customize = self.customize.clone();
                 let category = match self.category {
                     ExploreCategory::Content(c) => c,
@@ -417,24 +512,22 @@ impl SimpleComponent for ExploreModel {
                             input_sender.emit(ExploreMsg::InstallContentComplete(name_clone));
                         }
                         Err(e) => {
-                            tracing::error!("install failed: {e}");
                             input_sender.emit(ExploreMsg::ActionFailed(e.to_string()));
                         }
                     }
                 });
             }
             ExploreMsg::InstallContentComplete(name) => {
-                tracing::info!("content {name} installed");
+                let _ = sender.output(ExploreOutput::Toast(format!("Installed {name}")));
             }
             ExploreMsg::ApplyContent(name) => {
-                tracing::info!("applying: {name}");
                 let category = match self.category {
                     ExploreCategory::Content(c) => c,
                     _ => return,
                 };
                 match self.customize.apply_content(&name, category) {
                     Ok(()) => {
-                        tracing::info!("{name} applied");
+                        let _ = sender.output(ExploreOutput::Toast(format!("{name} applied")));
                     }
                     Err(e) => {
                         sender
@@ -445,7 +538,37 @@ impl SimpleComponent for ExploreModel {
             }
             ExploreMsg::ActionFailed(err) => {
                 tracing::warn!("action error: {err}");
+                let _ = sender.output(ExploreOutput::Toast(err));
             }
         }
+    }
+}
+
+/// Populate a landing list box with extension preview rows.
+fn populate_ext_landing_list(list: &gtk::ListBox, extensions: &[Extension]) {
+    // Clear existing
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+    for ext in extensions {
+        let row = adw::ActionRow::builder()
+            .title(&ext.name)
+            .subtitle(&format!("by {}", ext.creator))
+            .build();
+        list.append(&row);
+    }
+}
+
+/// Populate a landing list box with content item preview rows.
+fn populate_content_landing_list(list: &gtk::ListBox, items: &[ContentItem]) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+    for item in items {
+        let row = adw::ActionRow::builder()
+            .title(&item.name)
+            .subtitle(&format!("by {}", item.creator))
+            .build();
+        list.append(&row);
     }
 }

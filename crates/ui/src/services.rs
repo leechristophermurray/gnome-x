@@ -7,9 +7,10 @@
 //! the UI layer. It is threaded through component Init params so that
 //! every view can spawn async work on the tokio runtime.
 
-use gnomex_app::use_cases::{BrowseUseCase, CustomizeUseCase, ManageUseCase};
+use gnomex_app::use_cases::{BrowseUseCase, CustomizeUseCase, ManageUseCase, PacksUseCase};
 use gnomex_infra::{
     DbusShellProxy, EgoClient, FilesystemInstaller, GSettingsAppearance, OcsClient,
+    PackTomlStorage,
 };
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -21,6 +22,7 @@ pub struct AppServices {
     pub browse: Arc<BrowseUseCase>,
     pub manage: Arc<ManageUseCase>,
     pub customize: Arc<CustomizeUseCase>,
+    pub packs: Arc<PacksUseCase>,
 }
 
 impl AppServices {
@@ -31,6 +33,7 @@ impl AppServices {
         let ocs_client: Arc<OcsClient> = Arc::new(OcsClient::new());
         let installer: Arc<FilesystemInstaller> = Arc::new(FilesystemInstaller::new());
         let appearance: Arc<GSettingsAppearance> = Arc::new(GSettingsAppearance::new());
+        let pack_storage: Arc<PackTomlStorage> = Arc::new(PackTomlStorage::new());
 
         // D-Bus proxy requires an async connection. Create it lazily on first
         // use via a wrapper that blocks on the handle. For now, block here.
@@ -46,15 +49,31 @@ impl AppServices {
             shell_proxy.clone(),
         ));
 
-        let manage = Arc::new(ManageUseCase::new(installer.clone(), shell_proxy));
+        let manage = Arc::new(ManageUseCase::new(
+            installer.clone(),
+            shell_proxy.clone(),
+        ));
 
-        let customize = Arc::new(CustomizeUseCase::new(ocs_client, installer, appearance));
+        let customize = Arc::new(CustomizeUseCase::new(
+            ocs_client.clone(),
+            installer.clone(),
+            appearance.clone(),
+        ));
+
+        let packs = Arc::new(PacksUseCase::new(
+            pack_storage,
+            appearance,
+            shell_proxy,
+            installer,
+            ocs_client,
+        ));
 
         Self {
             handle,
             browse,
             manage,
             customize,
+            packs,
         }
     }
 }

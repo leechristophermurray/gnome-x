@@ -303,6 +303,98 @@ impl PackStorage for PackTomlStorage {
         }
         Ok(())
     }
+
+    fn export_pack(&self, id: &str, screenshot: Option<&[u8]>) -> Result<Vec<u8>, AppError> {
+        let pack = self.load_pack(id)?;
+        let pf = domain_to_pack_file(&pack);
+        let toml_str =
+            toml::to_string_pretty(&pf).map_err(|e| AppError::Storage(e.to_string()))?;
+
+        let mut buf = Vec::new();
+        {
+            let encoder = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+
+            // Add the manifest
+            let toml_bytes = toml_str.as_bytes();
+            let mut header = tar::Header::new_gnu();
+            header.set_size(toml_bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, "pack.toml", toml_bytes)
+                .map_err(|e| AppError::Storage(format!("tar append manifest: {e}")))?;
+
+            // Add screenshot if provided
+            if let Some(png) = screenshot {
+                let mut ss_header = tar::Header::new_gnu();
+                ss_header.set_size(png.len() as u64);
+                ss_header.set_mode(0o644);
+                ss_header.set_cksum();
+                archive
+                    .append_data(&mut ss_header, "screenshot.png", png)
+                    .map_err(|e| AppError::Storage(format!("tar append screenshot: {e}")))?;
+            }
+
+            archive
+                .finish()
+                .map_err(|e| AppError::Storage(format!("tar finish: {e}")))?;
+        }
+
+        Ok(buf)
+    }
+
+    fn import_pack(&self, archive_data: &[u8]) -> Result<(String, Option<Vec<u8>>), AppError> {
+        let decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(archive_data));
+        let mut archive = tar::Archive::new(decoder);
+
+        let mut toml_content: Option<String> = None;
+        let mut screenshot: Option<Vec<u8>> = None;
+
+        for entry in archive
+            .entries()
+            .map_err(|e| AppError::Storage(format!("read archive: {e}")))?
+        {
+            let mut entry =
+                entry.map_err(|e| AppError::Storage(format!("read entry: {e}")))?;
+            let path = entry
+                .path()
+                .map_err(|e| AppError::Storage(format!("entry path: {e}")))?
+                .to_path_buf();
+
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+
+            if name == "pack.toml" {
+                let mut s = String::new();
+                std::io::Read::read_to_string(&mut entry, &mut s)
+                    .map_err(|e| AppError::Storage(format!("read manifest: {e}")))?;
+                toml_content = Some(s);
+            } else if name == "screenshot.png" {
+                let mut data = Vec::new();
+                std::io::Read::read_to_end(&mut entry, &mut data)
+                    .map_err(|e| AppError::Storage(format!("read screenshot: {e}")))?;
+                screenshot = Some(data);
+            }
+        }
+
+        let toml_str = toml_content
+            .ok_or_else(|| AppError::Storage("archive missing pack.toml".into()))?;
+        let pf: PackFile =
+            toml::from_str(&toml_str).map_err(|e| AppError::Storage(e.to_string()))?;
+        let pack = pack_file_to_domain(pf)?;
+        let id = self.save_pack(&pack)?;
+
+        // Save screenshot alongside the pack if present
+        if let Some(ref png) = screenshot {
+            let ss_path = self.packs_dir.join(format!("{id}.screenshot.png"));
+            std::fs::write(&ss_path, png).ok();
+        }
+
+        Ok((id, screenshot))
+    }
 }
 
 fn load_pack_from_path(path: &Path) -> Result<ExperiencePack, AppError> {

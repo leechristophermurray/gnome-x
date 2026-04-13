@@ -28,4 +28,18 @@ pub trait ExtensionRepository: Send + Sync {
         uuid: &ExtensionUuid,
         shell_version: &ShellVersion,
     ) -> Result<Vec<u8>, AppError>;
+
+    /// List popular extensions.
+    async fn list_popular(
+        &self,
+        shell_version: &ShellVersion,
+        page: u32,
+    ) -> Result<SearchResult<Extension>, AppError>;
+
+    /// List recently updated extensions.
+    async fn list_recent(
+        &self,
+        shell_version: &ShellVersion,
+        page: u32,
+    ) -> Result<SearchResult<Extension>, AppError>;
 }

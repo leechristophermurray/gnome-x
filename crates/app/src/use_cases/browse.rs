@@ -76,4 +76,34 @@ impl BrowseUseCase {
         let shell_version = self.shell.get_shell_version().await?;
         self.extension_repo.get_info(uuid, &shell_version).await
     }
+
+    /// List popular extensions, cross-referenced against installed state.
+    pub async fn list_popular(&self) -> Result<SearchResult<Extension>, AppError> {
+        let shell_version = self.shell.get_shell_version().await?;
+        let mut result = self.extension_repo.list_popular(&shell_version, 1).await?;
+        self.patch_installed_state(&mut result).await;
+        Ok(result)
+    }
+
+    /// List recently updated extensions, cross-referenced against installed state.
+    pub async fn list_recent(&self) -> Result<SearchResult<Extension>, AppError> {
+        let shell_version = self.shell.get_shell_version().await?;
+        let mut result = self.extension_repo.list_recent(&shell_version, 1).await?;
+        self.patch_installed_state(&mut result).await;
+        Ok(result)
+    }
+
+    async fn patch_installed_state(&self, result: &mut SearchResult<Extension>) {
+        if let Ok(installed) = self.shell.list_extensions().await {
+            let state_map: std::collections::HashMap<_, _> = installed
+                .into_iter()
+                .map(|e| (e.uuid.clone(), e.state))
+                .collect();
+            for ext in &mut result.items {
+                if let Some(&state) = state_map.get(&ext.uuid) {
+                    ext.state = state;
+                }
+            }
+        }
+    }
 }

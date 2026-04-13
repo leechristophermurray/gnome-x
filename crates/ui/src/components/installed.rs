@@ -49,7 +49,9 @@ pub enum InstalledMsg {
 }
 
 #[derive(Debug)]
-pub enum InstalledOutput {}
+pub enum InstalledOutput {
+    Toast(String),
+}
 
 #[relm4::component(pub)]
 impl SimpleComponent for InstalledModel {
@@ -203,6 +205,7 @@ impl SimpleComponent for InstalledModel {
                 self.has_extensions = false;
                 self.update_stack();
                 tracing::warn!("load failed: {err}");
+                let _ = sender.output(InstalledOutput::Toast(format!("Failed to load extensions: {err}")));
             }
             InstalledMsg::ToggleExtension(uuid, enabled) => {
                 tracing::info!("toggling {uuid} to {enabled}");
@@ -230,6 +233,7 @@ impl SimpleComponent for InstalledModel {
             }
             InstalledMsg::ToggleFailed(err) => {
                 tracing::warn!("toggle error: {err}");
+                let _ = sender.output(InstalledOutput::Toast(format!("Toggle failed: {err}")));
             }
         }
     }

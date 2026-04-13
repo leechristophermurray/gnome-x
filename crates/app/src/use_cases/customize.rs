@@ -118,6 +118,22 @@ impl CustomizeUseCase {
         Ok(())
     }
 
+    /// List popular content items in a category.
+    pub async fn list_popular(
+        &self,
+        category: ContentCategory,
+    ) -> Result<SearchResult<ContentItem>, AppError> {
+        self.content_repo.list_popular(category, 1).await
+    }
+
+    /// List recently updated content items in a category.
+    pub async fn list_recent(
+        &self,
+        category: ContentCategory,
+    ) -> Result<SearchResult<ContentItem>, AppError> {
+        self.content_repo.list_recent(category, 1).await
+    }
+
     /// Get the currently active name for a category.
     fn active_name_for(&self, category: ContentCategory) -> Option<String> {
         let result = match category {

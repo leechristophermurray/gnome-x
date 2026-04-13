@@ -4,7 +4,9 @@
 mod browse;
 mod customize;
 mod manage;
+mod packs;
 
 pub use browse::*;
 pub use customize::*;
 pub use manage::*;
+pub use packs::*;
