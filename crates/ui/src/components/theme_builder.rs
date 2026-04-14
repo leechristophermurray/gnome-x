@@ -8,8 +8,10 @@
 use crate::services::AppServices;
 use adw::prelude::*;
 use gnomex_app::use_cases::ApplyThemeUseCase;
-use gnomex_domain::{HexColor, Opacity, Radius, ThemeSpec, PanelSpec, DashSpec, TintSpec};
+use gnomex_domain::theme_capability::{self, ThemeControlId};
+use gnomex_domain::{DashSpec, HexColor, Opacity, PanelSpec, Radius, ThemeSpec, TintSpec};
 use relm4::prelude::*;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const ACCENT_COLORS: &[(&str, &str, &str)] = &[
@@ -38,6 +40,7 @@ pub struct ThemeBuilderModel {
     tint_intensity: f64,
     dash_opacity: f64,
     overview_blur: bool,
+    compat_rows: HashMap<ThemeControlId, (adw::SpinRow, String)>, // (row, original_subtitle)
 }
 
 #[derive(Debug)]
@@ -53,6 +56,7 @@ pub enum ThemeBuilderMsg {
     SetTintIntensity(f64),
     SetDashOpacity(f64),
     SetOverviewBlur(bool),
+    RefreshCompat,
     Apply,
     Reset,
 }
@@ -422,8 +426,19 @@ impl SimpleComponent for ThemeBuilderModel {
             tint_intensity: saved.tint_intensity,
             dash_opacity: saved.dash_opacity,
             overview_blur: true,
+            compat_rows: HashMap::from([
+                (ThemeControlId::WindowRadius, (window_radius, "Corner radius for application windows".into())),
+                (ThemeControlId::ElementRadius, (element_radius, "Corner radius for buttons, entries, and cards".into())),
+                (ThemeControlId::PanelRadius, (panel_radius, "Roundness of the panel corners".into())),
+                (ThemeControlId::AccentTint, (tint_intensity, "How much accent color bleeds into surfaces (0\u{2013}20%)".into())),
+                (ThemeControlId::DashOpacity, (dash_opacity, "Transparency of the dash background".into())),
+            ]),
         };
         let widgets = view_output!();
+
+        // Initial compatibility check
+        sender.input(ThemeBuilderMsg::RefreshCompat);
+
         ComponentParts { model, widgets }
     }
 
@@ -514,11 +529,16 @@ impl SimpleComponent for ThemeBuilderModel {
             }
             ThemeBuilderMsg::SetWindowRadius(v) => {
                 self.window_radius = v;
+                sender.input(ThemeBuilderMsg::RefreshCompat);
             }
             ThemeBuilderMsg::SetElementRadius(v) => {
                 self.element_radius = v;
+                sender.input(ThemeBuilderMsg::RefreshCompat);
             }
-            ThemeBuilderMsg::SetPanelRadius(v) => self.panel_radius = v,
+            ThemeBuilderMsg::SetPanelRadius(v) => {
+                self.panel_radius = v;
+                sender.input(ThemeBuilderMsg::RefreshCompat);
+            }
             ThemeBuilderMsg::SetPanelOpacity(v) => self.panel_opacity = v,
             ThemeBuilderMsg::SetPanelTint(hex) => self.panel_tint_hex = hex,
             ThemeBuilderMsg::SetTintIntensity(v) => {
@@ -526,6 +546,34 @@ impl SimpleComponent for ThemeBuilderModel {
             }
             ThemeBuilderMsg::SetDashOpacity(v) => self.dash_opacity = v,
             ThemeBuilderMsg::SetOverviewBlur(v) => self.overview_blur = v,
+            ThemeBuilderMsg::RefreshCompat => {
+                if let Ok(spec) = self.build_spec() {
+                    let report = theme_capability::compatibility_report(&spec);
+
+                    // Reset all subtitles to originals
+                    for (row, original) in self.compat_rows.values() {
+                        row.set_subtitle(original);
+                    }
+
+                    // Append warnings to the subtitle of affected controls
+                    for (control, warnings) in &report {
+                        if let Some((row, original)) = self.compat_rows.get(control) {
+                            let warning_text = if warnings.len() == 1 {
+                                warnings[0].clone()
+                            } else {
+                                format!(
+                                    "{} GNOME versions affected",
+                                    warnings.len()
+                                )
+                            };
+                            row.set_subtitle(&format!(
+                                "{original}\n<span foreground=\"#e5a50a\">\u{26a0} {warning_text}</span>"
+                            ));
+                            row.set_tooltip_text(Some(&warnings.join("\n")));
+                        }
+                    }
+                }
+            }
             ThemeBuilderMsg::Apply => {
                 match self.build_spec() {
                     Ok(spec) => match self.apply_uc.apply(&spec) {

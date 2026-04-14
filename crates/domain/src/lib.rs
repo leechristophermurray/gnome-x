@@ -12,6 +12,7 @@ mod extension;
 mod experience_pack;
 mod shell_version;
 mod theme;
+pub mod theme_capability;
 mod theme_spec;
 
 pub use error::*;
