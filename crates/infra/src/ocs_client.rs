@@ -49,6 +49,18 @@ struct OcsContentEntry {
     score: u32,
 }
 
+// --- Download response DTO ---
+
+#[derive(Debug, Deserialize)]
+struct OcsDownloadResponse {
+    data: Vec<OcsDownloadEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OcsDownloadEntry {
+    downloadlink: Option<String>,
+}
+
 // --- Mapping ---
 
 fn ocs_entry_to_domain(entry: &OcsContentEntry, category: ContentCategory) -> ContentItem {
@@ -139,17 +151,41 @@ impl ContentRepository for OcsClient {
     }
 
     async fn download(&self, id: ContentId, file_id: u64) -> Result<Vec<u8>, AppError> {
-        let url = format!(
-            "{OCS_BASE}/content/download/{id}/{file_id}",
+        // Step 1: Get the download metadata to find the real file URL.
+        let meta_url = format!(
+            "{OCS_BASE}/content/download/{id}/{file_id}?format=json",
             id = id.0,
             file_id = file_id,
         );
 
-        tracing::debug!("OCS download: {url}");
+        tracing::debug!("OCS download meta: {meta_url}");
+
+        let meta: OcsDownloadResponse = self
+            .http
+            .get(&meta_url)
+            .send()
+            .await
+            .map_err(|e| AppError::Repository(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| AppError::Repository(e.to_string()))?;
+
+        let download_url = meta
+            .data
+            .first()
+            .and_then(|d| d.downloadlink.as_deref())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AppError::Repository(format!("no download link for content {}", id.0))
+            })?
+            .to_owned();
+
+        // Step 2: Download the actual file.
+        tracing::debug!("OCS download file: {download_url}");
 
         let bytes = self
             .http
-            .get(&url)
+            .get(&download_url)
             .send()
             .await
             .map_err(|e| AppError::Repository(e.to_string()))?

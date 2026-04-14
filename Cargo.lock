@@ -988,8 +988,10 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "xz2",
  "zbus",
  "zip",
+ "zstd",
 ]
 
 [[package]]

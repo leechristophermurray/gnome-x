@@ -112,7 +112,7 @@ impl LocalInstaller for FilesystemInstaller {
         _kind: ThemeType,
     ) -> Result<(), AppError> {
         let dest = self.themes_dir().join(name);
-        extract_tar_gz(archive_data, &dest).await
+        extract_archive(archive_data, &dest).await
     }
 
     async fn uninstall_theme(&self, name: &str) -> Result<(), AppError> {
@@ -121,12 +121,12 @@ impl LocalInstaller for FilesystemInstaller {
 
     async fn install_icon_pack(&self, name: &str, archive_data: &[u8]) -> Result<(), AppError> {
         let dest = self.icons_dir().join(name);
-        extract_tar_gz(archive_data, &dest).await
+        extract_archive(archive_data, &dest).await
     }
 
     async fn install_cursor(&self, name: &str, archive_data: &[u8]) -> Result<(), AppError> {
         let dest = self.icons_dir().join(name);
-        extract_tar_gz(archive_data, &dest).await
+        extract_archive(archive_data, &dest).await
     }
 
     fn list_installed_extensions(&self) -> Result<Vec<String>, AppError> {
@@ -135,10 +135,15 @@ impl LocalInstaller for FilesystemInstaller {
 
     fn list_installed_themes(&self) -> Result<Vec<String>, AppError> {
         let mut themes = Self::list_subdirs(&self.themes_dir())?;
-        // Also check ~/.themes for legacy installations
+        // Legacy user dir
         let legacy = self.home_dir.join(".themes");
         if legacy.exists() {
             themes.extend(Self::list_subdirs(&legacy)?);
+        }
+        // System themes
+        let system = std::path::Path::new("/usr/share/themes");
+        if system.exists() {
+            themes.extend(Self::list_subdirs(system)?);
         }
         themes.sort();
         themes.dedup();
@@ -151,27 +156,40 @@ impl LocalInstaller for FilesystemInstaller {
         if legacy.exists() {
             icons.extend(Self::list_subdirs(&legacy)?);
         }
+        // System icons
+        let system = std::path::Path::new("/usr/share/icons");
+        if system.exists() {
+            icons.extend(Self::list_subdirs(system)?);
+        }
         icons.sort();
         icons.dedup();
         Ok(icons)
     }
 
     fn list_installed_cursors(&self) -> Result<Vec<String>, AppError> {
-        // Cursors live alongside icons; filter for those containing a "cursors" subdir
-        let icons = self.list_installed_icons()?;
-        let base_dirs = [self.icons_dir(), self.home_dir.join(".icons")];
-        Ok(icons
-            .into_iter()
-            .filter(|name| {
-                base_dirs
-                    .iter()
-                    .any(|base| base.join(name).join("cursors").is_dir())
-            })
-            .collect())
+        let all_icon_dirs = [
+            self.icons_dir(),
+            self.home_dir.join(".icons"),
+            std::path::PathBuf::from("/usr/share/icons"),
+        ];
+        let mut cursors = Vec::new();
+        for dir in &all_icon_dirs {
+            if let Ok(names) = Self::list_subdirs(dir) {
+                for name in names {
+                    if dir.join(&name).join("cursors").is_dir() {
+                        cursors.push(name);
+                    }
+                }
+            }
+        }
+        cursors.sort();
+        cursors.dedup();
+        Ok(cursors)
     }
 }
 
-async fn extract_tar_gz(data: &[u8], dest: &Path) -> Result<(), AppError> {
+/// Detect archive format by magic bytes and extract accordingly.
+async fn extract_archive(data: &[u8], dest: &Path) -> Result<(), AppError> {
     tokio::fs::create_dir_all(dest)
         .await
         .map_err(|e| AppError::Install(format!("mkdir failed: {e}")))?;
@@ -179,17 +197,84 @@ async fn extract_tar_gz(data: &[u8], dest: &Path) -> Result<(), AppError> {
     let data = data.to_vec();
     let dest = dest.to_owned();
     tokio::task::spawn_blocking(move || {
-        let decoder = flate2::read::GzDecoder::new(Cursor::new(data));
-        let mut archive = tar::Archive::new(decoder);
-        archive
-            .unpack(&dest)
-            .map_err(|e| AppError::Install(format!("extract tar.gz failed: {e}")))?;
+        let format = detect_format(&data);
+        tracing::debug!("archive format: {format:?}, size: {} bytes", data.len());
+
+        match format {
+            ArchiveFormat::Zip => {
+                let cursor = Cursor::new(data);
+                let mut archive = zip::ZipArchive::new(cursor)
+                    .map_err(|e| AppError::Install(format!("invalid zip: {e}")))?;
+                archive
+                    .extract(&dest)
+                    .map_err(|e| AppError::Install(format!("extract zip failed: {e}")))?;
+            }
+            ArchiveFormat::TarGz => {
+                let decoder = flate2::read::GzDecoder::new(Cursor::new(data));
+                let mut archive = tar::Archive::new(decoder);
+                archive
+                    .unpack(&dest)
+                    .map_err(|e| AppError::Install(format!("extract tar.gz failed: {e}")))?;
+            }
+            ArchiveFormat::TarXz => {
+                let decoder = xz2::read::XzDecoder::new(Cursor::new(data));
+                let mut archive = tar::Archive::new(decoder);
+                archive
+                    .unpack(&dest)
+                    .map_err(|e| AppError::Install(format!("extract tar.xz failed: {e}")))?;
+            }
+            ArchiveFormat::TarZstd => {
+                let decoder = zstd::stream::read::Decoder::new(Cursor::new(data))
+                    .map_err(|e| AppError::Install(format!("invalid zstd: {e}")))?;
+                let mut archive = tar::Archive::new(decoder);
+                archive
+                    .unpack(&dest)
+                    .map_err(|e| AppError::Install(format!("extract tar.zst failed: {e}")))?;
+            }
+            ArchiveFormat::Unknown => {
+                return Err(AppError::Install(
+                    "unrecognized archive format (expected zip, tar.gz, tar.xz, or tar.zst)".into(),
+                ));
+            }
+        }
         Ok::<_, AppError>(())
     })
     .await
     .map_err(|e| AppError::Install(format!("task join error: {e}")))??;
 
     Ok(())
+}
+
+#[derive(Debug)]
+enum ArchiveFormat {
+    Zip,
+    TarGz,
+    TarXz,
+    TarZstd,
+    Unknown,
+}
+
+fn detect_format(data: &[u8]) -> ArchiveFormat {
+    if data.len() < 6 {
+        return ArchiveFormat::Unknown;
+    }
+    // ZIP: starts with PK\x03\x04
+    if data[0..4] == [0x50, 0x4B, 0x03, 0x04] {
+        return ArchiveFormat::Zip;
+    }
+    // GZ: starts with \x1F\x8B
+    if data[0..2] == [0x1F, 0x8B] {
+        return ArchiveFormat::TarGz;
+    }
+    // XZ: starts with \xFD7zXZ\x00
+    if data[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] {
+        return ArchiveFormat::TarXz;
+    }
+    // Zstandard: starts with \x28\xB5\x2F\xFD
+    if data[0..4] == [0x28, 0xB5, 0x2F, 0xFD] {
+        return ArchiveFormat::TarZstd;
+    }
+    ArchiveFormat::Unknown
 }
 
 async fn remove_dir_if_exists(path: &Path) -> Result<(), AppError> {

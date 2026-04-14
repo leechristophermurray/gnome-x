@@ -10,8 +10,8 @@ use crate::components::extension_row::{
 };
 use crate::services::AppServices;
 use adw::prelude::*;
-use gnomex_app::use_cases::ManageUseCase;
-use gnomex_domain::{Extension, ExtensionUuid};
+use gnomex_app::use_cases::{CustomizeUseCase, ManageUseCase};
+use gnomex_domain::{ContentCategory, Extension, ExtensionUuid};
 use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
 use std::sync::Arc;
@@ -20,6 +20,7 @@ use tokio::runtime::Handle;
 pub struct InstalledModel {
     handle: Handle,
     manage: Arc<ManageUseCase>,
+    customize: Arc<CustomizeUseCase>,
     extensions: FactoryVecDeque<ExtensionRowModel>,
     detail: Controller<DetailViewModel>,
     content_stack: gtk::Stack,
@@ -56,7 +57,7 @@ pub enum InstalledMsg {
     ToggleExtension(ExtensionUuid, bool),
     ToggleComplete(ExtensionUuid, bool),
     ToggleFailed(String),
-    ShowDetail {
+    ShowExtDetail {
         name: String,
         uuid: String,
         creator: String,
@@ -64,6 +65,12 @@ pub enum InstalledMsg {
         screenshot_url: Option<String>,
         installed: bool,
     },
+    ShowContentDetail {
+        name: String,
+        category: String,
+    },
+    ApplyContent(String, ContentCategory),
+    ApplyComplete(String),
     DetailBack,
 }
 
@@ -104,7 +111,7 @@ impl SimpleComponent for InstalledModel {
                         description,
                         screenshot_url,
                         installed,
-                    } => InstalledMsg::ShowDetail {
+                    } => InstalledMsg::ShowExtDetail {
                         name,
                         uuid,
                         creator,
@@ -191,6 +198,17 @@ impl SimpleComponent for InstalledModel {
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
+        {
+            let sender = sender.clone();
+            themes_list.connect_row_activated(move |_, row| {
+                if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
+                    sender.input(InstalledMsg::ShowContentDetail {
+                        name: action_row.title().to_string(),
+                        category: "theme".into(),
+                    });
+                }
+            });
+        }
         list_container.append(&themes_label);
         list_container.append(&themes_list);
 
@@ -204,6 +222,17 @@ impl SimpleComponent for InstalledModel {
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
+        {
+            let sender = sender.clone();
+            icons_list.connect_row_activated(move |_, row| {
+                if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
+                    sender.input(InstalledMsg::ShowContentDetail {
+                        name: action_row.title().to_string(),
+                        category: "icon pack".into(),
+                    });
+                }
+            });
+        }
         list_container.append(&icons_label);
         list_container.append(&icons_list);
 
@@ -217,6 +246,17 @@ impl SimpleComponent for InstalledModel {
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
+        {
+            let sender = sender.clone();
+            cursors_list.connect_row_activated(move |_, row| {
+                if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
+                    sender.input(InstalledMsg::ShowContentDetail {
+                        name: action_row.title().to_string(),
+                        category: "cursor".into(),
+                    });
+                }
+            });
+        }
         list_container.append(&cursors_label);
         list_container.append(&cursors_list);
 
@@ -233,6 +273,7 @@ impl SimpleComponent for InstalledModel {
         let model = InstalledModel {
             handle: services.handle,
             manage: services.manage,
+            customize: services.customize,
             extensions,
             detail,
             content_stack: content_stack.clone(),
@@ -309,11 +350,38 @@ impl SimpleComponent for InstalledModel {
                 icons,
                 cursors,
             } => {
-                populate_name_list(&self.themes_list, &themes);
-                populate_name_list(&self.icons_list, &icons);
-                populate_name_list(&self.cursors_list, &cursors);
+                let active_theme = self
+                    .customize
+                    .active_name_for(ContentCategory::GtkTheme);
+                let active_icon = self
+                    .customize
+                    .active_name_for(ContentCategory::IconTheme);
+                let active_cursor = self
+                    .customize
+                    .active_name_for(ContentCategory::CursorTheme);
 
-                // Update has_content if we got content items even before extensions load
+                populate_content_list(
+                    &self.themes_list,
+                    &themes,
+                    active_theme.as_deref(),
+                    ContentCategory::GtkTheme,
+                    &sender,
+                );
+                populate_content_list(
+                    &self.icons_list,
+                    &icons,
+                    active_icon.as_deref(),
+                    ContentCategory::IconTheme,
+                    &sender,
+                );
+                populate_content_list(
+                    &self.cursors_list,
+                    &cursors,
+                    active_cursor.as_deref(),
+                    ContentCategory::CursorTheme,
+                    &sender,
+                );
+
                 if !themes.is_empty() || !icons.is_empty() || !cursors.is_empty() {
                     self.has_content = true;
                 }
@@ -344,7 +412,7 @@ impl SimpleComponent for InstalledModel {
             InstalledMsg::ToggleFailed(err) => {
                 let _ = sender.output(InstalledOutput::Toast(format!("Toggle failed: {err}")));
             }
-            InstalledMsg::ShowDetail {
+            InstalledMsg::ShowExtDetail {
                 name,
                 uuid,
                 creator,
@@ -362,6 +430,36 @@ impl SimpleComponent for InstalledModel {
                 }));
                 self.content_stack.set_visible_child_name("detail");
             }
+            InstalledMsg::ShowContentDetail { name, category } => {
+                self.detail.emit(DetailViewMsg::Show(DetailItem::Content {
+                    name: name.clone(),
+                    creator: String::new(),
+                    id: 0,
+                    description: format!("Locally installed {category}: {name}"),
+                    preview_url: None,
+                    installed: true,
+                }));
+                self.content_stack.set_visible_child_name("detail");
+            }
+            InstalledMsg::ApplyContent(name, category) => {
+                match self.customize.apply_content(&name, category) {
+                    Ok(()) => {
+                        sender
+                            .input_sender()
+                            .emit(InstalledMsg::ApplyComplete(name));
+                    }
+                    Err(e) => {
+                        let _ = sender.output(InstalledOutput::Toast(format!(
+                            "Failed to apply: {e}"
+                        )));
+                    }
+                }
+            }
+            InstalledMsg::ApplyComplete(name) => {
+                let _ = sender.output(InstalledOutput::Toast(format!("{name} applied")));
+                // Refresh to update active indicators
+                sender.input(InstalledMsg::Refresh);
+            }
             InstalledMsg::DetailBack => {
                 self.update_stack();
             }
@@ -369,15 +467,53 @@ impl SimpleComponent for InstalledModel {
     }
 }
 
-/// Populate a ListBox with simple name-only rows.
-fn populate_name_list(list: &gtk::ListBox, names: &[String]) {
+/// Populate a ListBox with content rows showing active state and apply buttons.
+fn populate_content_list(
+    list: &gtk::ListBox,
+    names: &[String],
+    active_name: Option<&str>,
+    category: ContentCategory,
+    sender: &ComponentSender<InstalledModel>,
+) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
     }
     for name in names {
+        let is_active = active_name == Some(name.as_str());
         let row = adw::ActionRow::builder()
             .title(name)
+            .activatable(true)
             .build();
+
+        let suffix = gtk::Box::builder()
+            .spacing(8)
+            .valign(gtk::Align::Center)
+            .build();
+
+        if is_active {
+            let label = gtk::Label::builder()
+                .label("Active")
+                .css_classes(["success"])
+                .build();
+            suffix.append(&label);
+        } else {
+            let apply_btn = gtk::Button::builder()
+                .label("Apply")
+                .css_classes(["suggested-action"])
+                .build();
+            let sender = sender.clone();
+            let item_name = name.clone();
+            apply_btn.connect_clicked(move |_| {
+                sender.input(InstalledMsg::ApplyContent(item_name.clone(), category));
+            });
+            suffix.append(&apply_btn);
+        }
+
+        let chevron = gtk::Image::from_icon_name("go-next-symbolic");
+        chevron.add_css_class("dim-label");
+        suffix.append(&chevron);
+
+        row.add_suffix(&suffix);
         list.append(&row);
     }
 }

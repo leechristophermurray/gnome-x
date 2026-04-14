@@ -12,7 +12,6 @@ pub struct ContentRowModel {
     creator: String,
     description: String,
     id: u64,
-    file_id: u64,
     preview_url: Option<String>,
     state: ContentState,
 }
@@ -22,7 +21,6 @@ pub struct ContentRowInit {
     pub creator: String,
     pub description: String,
     pub id: u64,
-    pub file_id: u64,
     pub preview_url: Option<String>,
     pub state: ContentState,
 }
@@ -35,7 +33,7 @@ pub enum ContentRowMsg {
 
 #[derive(Debug)]
 pub enum ContentRowOutput {
-    Install(ContentId, u64, String),
+    Install(ContentId, String), // id, name
     Apply(String),
     ShowDetail {
         name: String,
@@ -102,7 +100,6 @@ impl FactoryComponent for ContentRowModel {
             creator: init.creator,
             description: init.description,
             id: init.id,
-            file_id: init.file_id,
             preview_url: init.preview_url,
             state: init.state,
         }
@@ -114,7 +111,6 @@ impl FactoryComponent for ContentRowModel {
                 ContentState::Available => {
                     let _ = sender.output(ContentRowOutput::Install(
                         ContentId(self.id),
-                        self.file_id,
                         self.name.clone(),
                     ));
                 }

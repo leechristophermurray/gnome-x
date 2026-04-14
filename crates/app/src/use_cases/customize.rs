@@ -63,15 +63,16 @@ impl CustomizeUseCase {
         Ok(result)
     }
 
-    /// Install a content item by downloading and extracting it.
+    /// Install a content item by downloading via OCS and extracting it.
     pub async fn install_content(
         &self,
         id: ContentId,
-        file_id: u64,
         name: &str,
         category: ContentCategory,
     ) -> Result<(), AppError> {
-        let data = self.content_repo.download(id, file_id).await?;
+        // Always use the OCS download API to get a fresh JWT-signed URL.
+        // The downloadlink1 from search results expires quickly.
+        let data = self.content_repo.download(id, 1).await?;
 
         match category {
             ContentCategory::GtkTheme => {
@@ -135,7 +136,7 @@ impl CustomizeUseCase {
     }
 
     /// Get the currently active name for a category.
-    fn active_name_for(&self, category: ContentCategory) -> Option<String> {
+    pub fn active_name_for(&self, category: ContentCategory) -> Option<String> {
         let result = match category {
             ContentCategory::GtkTheme => self.appearance.get_gtk_theme(),
             ContentCategory::ShellTheme => self.appearance.get_shell_theme(),

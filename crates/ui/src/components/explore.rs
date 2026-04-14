@@ -111,7 +111,7 @@ pub enum ExploreMsg {
     // Actions
     InstallExtension(ExtensionUuid),
     InstallExtComplete(ExtensionUuid),
-    InstallContent(ContentId, u64, String),
+    InstallContent(ContentId, String),
     InstallContentComplete(String),
     DetailInstallExt(String),
     DetailInstallContent(u64, String),
@@ -193,8 +193,8 @@ impl SimpleComponent for ExploreModel {
             FactoryVecDeque::builder()
                 .launch(gtk::ListBox::default())
                 .forward(sender.input_sender(), |output| match output {
-                    ContentRowOutput::Install(id, file_id, name) => {
-                        ExploreMsg::InstallContent(id, file_id, name)
+                    ContentRowOutput::Install(id, name) => {
+                        ExploreMsg::InstallContent(id, name)
                     }
                     ContentRowOutput::Apply(name) => ExploreMsg::ApplyContent(name),
                     ContentRowOutput::ShowDetail {
@@ -618,7 +618,6 @@ impl SimpleComponent for ExploreModel {
                         creator: item.creator,
                         description: item.description,
                         id: item.id.0,
-                        file_id: 1,
                         preview_url: item.preview_url,
                         state: item.state,
                     });
@@ -680,7 +679,7 @@ impl SimpleComponent for ExploreModel {
                 }
             }
             ExploreMsg::DetailInstallContent(id, name) => {
-                sender.input(ExploreMsg::InstallContent(ContentId(id), 1, name));
+                sender.input(ExploreMsg::InstallContent(ContentId(id), name));
             }
 
             // --- Actions ---
@@ -702,7 +701,7 @@ impl SimpleComponent for ExploreModel {
             ExploreMsg::InstallExtComplete(uuid) => {
                 let _ = sender.output(ExploreOutput::Toast(format!("Installed {uuid}")));
             }
-            ExploreMsg::InstallContent(id, file_id, name) => {
+            ExploreMsg::InstallContent(id, name) => {
                 let customize = self.customize.clone();
                 let category = match self.category {
                     ExploreCategory::Content(c) => c,
@@ -712,7 +711,7 @@ impl SimpleComponent for ExploreModel {
                 let name_clone = name.clone();
                 self.handle.spawn(async move {
                     match customize
-                        .install_content(id, file_id, &name_clone, category)
+                        .install_content(id, &name_clone, category)
                         .await
                     {
                         Ok(()) => {
