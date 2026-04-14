@@ -11,6 +11,7 @@ mod common;
 mod gnome45;
 mod gnome46;
 mod gnome47;
+mod gnome50;
 
 use gnomex_app::ports::ThemeCssGenerator;
 use gnomex_domain::ShellVersion;
@@ -23,6 +24,7 @@ pub fn create_css_generator(version: &ShellVersion) -> Box<dyn ThemeCssGenerator
     match version.major {
         45 => Box::new(gnome45::Gnome45CssGenerator),
         46 => Box::new(gnome46::Gnome46CssGenerator),
-        _ => Box::new(gnome47::Gnome47CssGenerator), // 47+ and future versions
+        47..=49 => Box::new(gnome47::Gnome47CssGenerator),
+        _ => Box::new(gnome50::Gnome50CssGenerator), // 50+ and future versions
     }
 }
