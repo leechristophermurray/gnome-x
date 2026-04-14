@@ -7,10 +7,12 @@
 //! the UI layer. It is threaded through component Init params so that
 //! every view can spawn async work on the tokio runtime.
 
-use gnomex_app::use_cases::{BrowseUseCase, CustomizeUseCase, ManageUseCase, PacksUseCase};
+use gnomex_app::use_cases::{
+    ApplyThemeUseCase, BrowseUseCase, CustomizeUseCase, ManageUseCase, PacksUseCase,
+};
 use gnomex_infra::{
-    DbusShellProxy, EgoClient, FilesystemInstaller, GSettingsAppearance, OcsClient,
-    PackTomlStorage,
+    DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter, GSettingsAppearance,
+    OcsClient, PackTomlStorage,
 };
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -23,6 +25,8 @@ pub struct AppServices {
     pub manage: Arc<ManageUseCase>,
     pub customize: Arc<CustomizeUseCase>,
     pub packs: Arc<PacksUseCase>,
+    pub apply_theme: Arc<ApplyThemeUseCase>,
+    pub detected_gnome_version: String,
 }
 
 impl AppServices {
@@ -35,13 +39,27 @@ impl AppServices {
         let appearance: Arc<GSettingsAppearance> = Arc::new(GSettingsAppearance::new());
         let pack_storage: Arc<PackTomlStorage> = Arc::new(PackTomlStorage::new());
 
-        // D-Bus proxy requires an async connection. Create it lazily on first
-        // use via a wrapper that blocks on the handle. For now, block here.
+        // D-Bus proxy requires an async connection.
         let shell_proxy: Arc<DbusShellProxy> = Arc::new(
             handle
                 .block_on(DbusShellProxy::new())
                 .expect("failed to connect to GNOME Shell D-Bus — is GNOME Shell running?"),
         );
+
+        // Detect shell version for the theme CSS adapter factory.
+        let shell_version = handle
+            .block_on(async {
+                use gnomex_app::ports::ShellProxy;
+                shell_proxy.get_shell_version().await
+            })
+            .unwrap_or_else(|_| gnomex_domain::ShellVersion::new(47, 0));
+
+        let css_generator: Arc<dyn gnomex_app::ports::ThemeCssGenerator> =
+            Arc::from(gnomex_infra::theme_css::create_css_generator(&shell_version));
+        let detected_gnome_version = css_generator.version_label().to_owned();
+
+        let theme_writer: Arc<FilesystemThemeWriter> =
+            Arc::new(FilesystemThemeWriter::new());
 
         let browse = Arc::new(BrowseUseCase::new(
             ego_client.clone(),
@@ -62,10 +80,16 @@ impl AppServices {
 
         let packs = Arc::new(PacksUseCase::new(
             pack_storage,
-            appearance,
+            appearance.clone(),
             shell_proxy,
             installer,
             ocs_client,
+        ));
+
+        let apply_theme = Arc::new(ApplyThemeUseCase::new(
+            css_generator,
+            theme_writer,
+            appearance,
         ));
 
         Self {
@@ -74,6 +98,8 @@ impl AppServices {
             manage,
             customize,
             packs,
+            apply_theme,
+            detected_gnome_version,
         }
     }
 }

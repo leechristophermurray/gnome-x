@@ -12,6 +12,8 @@ mod extension_repository;
 mod local_installer;
 mod pack_storage;
 mod shell_proxy;
+mod theme_css;
+mod theme_writer;
 
 pub use appearance_settings::*;
 pub use content_repository::*;
@@ -19,3 +21,5 @@ pub use extension_repository::*;
 pub use local_installer::*;
 pub use pack_storage::*;
 pub use shell_proxy::*;
+pub use theme_css::*;
+pub use theme_writer::*;

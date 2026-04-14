@@ -5,12 +5,12 @@
 //! Generates CSS overrides for window radius, element radius, panel styling,
 //! and accent-tinted surfaces (replaces Tint my Shell / Tint my GNOME).
 
+use crate::services::AppServices;
 use adw::prelude::*;
+use gnomex_app::use_cases::ApplyThemeUseCase;
+use gnomex_domain::{HexColor, Opacity, Radius, ThemeSpec, PanelSpec, DashSpec, TintSpec};
 use relm4::prelude::*;
-
-const GTK_CSS_PATH: &str = ".config/gtk-4.0/gtk.css";
-const SHELL_THEME_DIR: &str = ".local/share/themes/GNOME-X-Custom/gnome-shell";
-const SHELL_THEME_NAME: &str = "GNOME-X-Custom";
+use std::sync::Arc;
 
 const ACCENT_COLORS: &[(&str, &str, &str)] = &[
     ("blue", "Blue", "#3584e4"),
@@ -26,18 +26,16 @@ const ACCENT_COLORS: &[(&str, &str, &str)] = &[
 
 /// Current theme builder state.
 pub struct ThemeBuilderModel {
-    // Wallpaper color swatches container
+    apply_uc: Arc<ApplyThemeUseCase>,
+    detected_version: String,
     wallpaper_swatches: gtk::Box,
-    // Radii (px)
+    // Raw slider values (validated into ThemeSpec on Apply)
     window_radius: f64,
     element_radius: f64,
     panel_radius: f64,
-    // Panel
     panel_opacity: f64,
     panel_tint_hex: String,
-    // Accent tint
     tint_intensity: f64,
-    // Shell
     dash_opacity: f64,
     overview_blur: bool,
 }
@@ -66,7 +64,7 @@ pub enum ThemeBuilderOutput {
 
 #[relm4::component(pub)]
 impl SimpleComponent for ThemeBuilderModel {
-    type Init = ();
+    type Init = AppServices;
     type Input = ThemeBuilderMsg;
     type Output = ThemeBuilderOutput;
 
@@ -77,7 +75,7 @@ impl SimpleComponent for ThemeBuilderModel {
     }
 
     fn init(
-        _: (),
+        services: AppServices,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
@@ -399,6 +397,8 @@ impl SimpleComponent for ThemeBuilderModel {
         root.append(&scroll);
 
         let model = ThemeBuilderModel {
+            apply_uc: services.apply_theme,
+            detected_version: services.detected_gnome_version,
             wallpaper_swatches: wallpaper_swatches.clone(),
             window_radius: saved.window_radius,
             element_radius: saved.element_radius,
@@ -513,15 +513,22 @@ impl SimpleComponent for ThemeBuilderModel {
             ThemeBuilderMsg::SetDashOpacity(v) => self.dash_opacity = v,
             ThemeBuilderMsg::SetOverviewBlur(v) => self.overview_blur = v,
             ThemeBuilderMsg::Apply => {
-                match self.write_all() {
-                    Ok(()) => {
-                        let _ = sender.output(ThemeBuilderOutput::Toast(
-                            "Theme applied \u{2014} restart apps to see changes".into(),
-                        ));
-                    }
+                match self.build_spec() {
+                    Ok(spec) => match self.apply_uc.apply(&spec) {
+                        Ok(()) => {
+                            let ver = &self.detected_version;
+                            let _ = sender.output(ThemeBuilderOutput::Toast(
+                                format!("Theme applied ({ver}) \u{2014} restart apps to see changes"),
+                            ));
+                        }
+                        Err(e) => {
+                            let _ = sender
+                                .output(ThemeBuilderOutput::Toast(format!("Error: {e}")));
+                        }
+                    },
                     Err(e) => {
                         let _ =
-                            sender.output(ThemeBuilderOutput::Toast(format!("Error: {e}")));
+                            sender.output(ThemeBuilderOutput::Toast(format!("Invalid: {e}")));
                     }
                 }
             }
@@ -535,19 +542,7 @@ impl SimpleComponent for ThemeBuilderModel {
                 self.dash_opacity = 70.0;
                 self.overview_blur = true;
 
-                // Remove user CSS overrides
-                let home = dirs::home_dir().unwrap_or_default();
-                let _ = std::fs::remove_file(home.join(GTK_CSS_PATH));
-                let _ = std::fs::remove_dir_all(home.join(SHELL_THEME_DIR));
-
-                // Clear shell theme setting
-                if let Some(src) = gio::SettingsSchemaSource::default() {
-                    if src.lookup("org.gnome.shell.extensions.user-theme", true).is_some() {
-                        let shell_settings = gio::Settings::new("org.gnome.shell.extensions.user-theme");
-                        let _ = shell_settings.set_string("name", "");
-                    }
-                }
-
+                let _ = self.apply_uc.reset();
                 let _ = sender
                     .output(ThemeBuilderOutput::Toast("Reset to defaults".into()));
             }
@@ -556,181 +551,38 @@ impl SimpleComponent for ThemeBuilderModel {
 }
 
 impl ThemeBuilderModel {
-    /// Generate the full GTK4/Libadwaita CSS override (written to disk on Apply).
-    fn generate_gtk_css(&self) -> String {
-        let wr = self.window_radius as i32;
-        let er = self.element_radius as i32;
-        let tint_pct = self.tint_intensity / 100.0;
-
-        format!(
-            r#"/* Generated by GNOME X Theme Builder */
-
-/* Border radius */
-window.background {{ border-radius: {wr}px; }}
-window.dialog {{ border-radius: {wr}px; }}
-button {{ border-radius: {er}px; }}
-entry {{ border-radius: {er}px; }}
-.card {{ border-radius: {er}px; }}
-popover > contents {{ border-radius: {er}px; }}
-
-/* Accent-tinted surfaces */
-@media (prefers-color-scheme: light) {{
-    @define-color window_bg_color mix(#fafafb, @accent_bg_color, {tint_light});
-    @define-color view_bg_color mix(#ffffff, @accent_bg_color, {tint_light});
-    @define-color headerbar_bg_color mix(#ffffff, @accent_bg_color, {tint_light});
-    @define-color headerbar_backdrop_color mix(#fafafb, @accent_bg_color, {tint_light});
-    @define-color popover_bg_color mix(#ffffff, @accent_bg_color, {tint_light});
-    @define-color dialog_bg_color mix(#fafafb, @accent_bg_color, {tint_light});
-    @define-color card_bg_color mix(#ffffff, @accent_bg_color, {tint_card_light});
-    @define-color sidebar_bg_color mix(#ebebed, @accent_bg_color, {tint_light});
-}}
-
-@media (prefers-color-scheme: dark) {{
-    @define-color window_bg_color mix(#222226, @accent_bg_color, {tint_dark});
-    @define-color view_bg_color mix(#1d1d20, @accent_bg_color, {tint_dark});
-    @define-color headerbar_bg_color mix(#2e2e32, @accent_bg_color, {tint_dark});
-    @define-color headerbar_backdrop_color mix(#222226, @accent_bg_color, {tint_dark});
-    @define-color popover_bg_color mix(#36363a, @accent_bg_color, {tint_dark});
-    @define-color dialog_bg_color mix(#36363a, @accent_bg_color, {tint_dark});
-    @define-color card_bg_color mix(rgba(255, 255, 255, 0.08), @accent_bg_color, {tint_dark});
-    @define-color sidebar_bg_color mix(#2e2e32, @accent_bg_color, {tint_dark});
-}}
-"#,
-            tint_light = tint_pct + 0.025,
-            tint_card_light = tint_pct * 0.6,
-            tint_dark = tint_pct,
-        )
+    /// Build a validated ThemeSpec from the current slider values.
+    fn build_spec(&self) -> Result<ThemeSpec, gnomex_domain::DomainError> {
+        let accent_hex = current_accent_hex();
+        Ok(ThemeSpec {
+            window_radius: Radius::new(self.window_radius)?,
+            element_radius: Radius::new(self.element_radius)?,
+            panel: PanelSpec {
+                radius: Radius::new(self.panel_radius)?,
+                opacity: Opacity::from_percent(self.panel_opacity)?,
+                tint: HexColor::new(&self.panel_tint_hex)?,
+            },
+            dash: DashSpec {
+                opacity: Opacity::from_percent(self.dash_opacity)?,
+            },
+            tint: TintSpec {
+                accent_hex: HexColor::new(&accent_hex)?,
+                intensity: Opacity::from_percent(self.tint_intensity)?,
+            },
+            overview_blur: self.overview_blur,
+        })
     }
+}
 
-    /// Get the current accent color hex from GSettings.
-    fn current_accent_hex(&self) -> String {
-        let iface = gio::Settings::new("org.gnome.desktop.interface");
-        let name = iface.string("accent-color").to_string();
-        ACCENT_COLORS
-            .iter()
-            .find(|(id, _, _)| *id == name)
-            .map(|(_, _, hex)| hex.to_string())
-            .unwrap_or_else(|| "#3584e4".into())
-    }
-
-    /// Generate GNOME Shell CSS override with accent-tinted surfaces.
-    fn generate_shell_css(&self) -> String {
-        let opacity = self.panel_opacity / 100.0;
-        let pr = self.panel_radius as i32;
-        let dash_opacity = self.dash_opacity / 100.0;
-        let tint_pct = self.tint_intensity as f32 / 100.0;
-
-        let accent_hex = self.current_accent_hex();
-        let accent = parse_hex(&accent_hex);
-
-        // Dark shell base colors
-        let panel_base = (0x24, 0x24, 0x28);  // shell panel base
-        let dash_base = (0x30, 0x30, 0x34);   // dash/popup base
-        let osd_base = (0x30, 0x30, 0x34);    // OSD/dialog base
-        let search_base = (0x3a, 0x3a, 0x3e); // search entry base
-
-        let panel_tinted = blend(panel_base, accent, tint_pct);
-        let dash_tinted = blend(dash_base, accent, tint_pct);
-        let osd_tinted = blend(osd_base, accent, tint_pct);
-        let search_tinted = blend(search_base, accent, tint_pct);
-
-        let blur_css = if self.overview_blur {
-            "/* Overview blur enabled via shell settings */"
-        } else {
-            "#overview { background-color: rgba(0, 0, 0, 0.6); }"
-        };
-
-        format!(
-            r#"/* Generated by GNOME X Theme Builder */
-/* Import the default GNOME Shell theme as base */
-@import url("resource:///org/gnome/shell/theme/gnome-shell.css");
-
-/* Accent-tinted panel */
-#panel {{
-    background-color: alpha({panel}, {opacity}) !important;
-    border-radius: 0 0 {pr}px {pr}px;
-}}
-
-#panel .panel-button {{
-    border-radius: {pr}px;
-}}
-
-/* Accent-tinted dash */
-#dash {{
-    background-color: alpha({dash}, {dash_opacity});
-    border-radius: 16px;
-    padding: 6px;
-    margin: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-}}
-
-.dash-item-container .app-well-app {{
-    border-radius: 12px;
-}}
-
-/* Accent-tinted search */
-.search-entry {{
-    background-color: {search};
-    border-radius: 18px;
-}}
-
-/* Accent-tinted OSD / popups */
-.osd, .popup-menu-content, .candidate-popup-content {{
-    background-color: {osd};
-}}
-
-/* Calendar / message tray */
-.events-button, .world-clocks-button, .weather-button, .message {{
-    background-color: alpha({osd}, 0.9);
-}}
-
-{blur_css}
-"#,
-            panel = panel_tinted,
-            dash = dash_tinted,
-            search = search_tinted,
-            osd = osd_tinted,
-        )
-    }
-
-    /// Write GTK and Shell CSS to disk and activate the shell theme.
-    fn write_all(&self) -> Result<(), String> {
-        let home = dirs::home_dir().ok_or("cannot find home directory")?;
-
-        // Write GTK CSS
-        let gtk_path = home.join(GTK_CSS_PATH);
-        if let Some(parent) = gtk_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let gtk_css = self.generate_gtk_css();
-        std::fs::write(&gtk_path, &gtk_css).map_err(|e| e.to_string())?;
-        tracing::info!("wrote GTK CSS to {}", gtk_path.display());
-
-        // Write Shell CSS
-        let shell_dir = home.join(SHELL_THEME_DIR);
-        std::fs::create_dir_all(&shell_dir).map_err(|e| e.to_string())?;
-        let shell_css = self.generate_shell_css();
-        std::fs::write(shell_dir.join("gnome-shell.css"), &shell_css)
-            .map_err(|e| e.to_string())?;
-        tracing::info!("wrote Shell CSS to {}", shell_dir.display());
-
-        // Activate shell theme via user-theme extension
-        if let Some(src) = gio::SettingsSchemaSource::default() {
-            if src
-                .lookup("org.gnome.shell.extensions.user-theme", true)
-                .is_some()
-            {
-                let settings =
-                    gio::Settings::new("org.gnome.shell.extensions.user-theme");
-                settings
-                    .set_string("name", SHELL_THEME_NAME)
-                    .map_err(|e| e.to_string())?;
-                tracing::info!("activated shell theme: {SHELL_THEME_NAME}");
-            }
-        }
-
-        Ok(())
-    }
+/// Read the current accent color hex from GSettings.
+fn current_accent_hex() -> String {
+    let iface = gio::Settings::new("org.gnome.desktop.interface");
+    let name = iface.string("accent-color").to_string();
+    ACCENT_COLORS
+        .iter()
+        .find(|(id, _, _)| *id == name)
+        .map(|(_, _, hex)| hex.to_string())
+        .unwrap_or_else(|| "#3584e4".into())
 }
 
 fn build_spin_row(
@@ -783,7 +635,7 @@ fn load_saved_values() -> SavedValues {
     };
 
     // Parse GTK CSS
-    if let Ok(gtk_css) = std::fs::read_to_string(home.join(GTK_CSS_PATH)) {
+    if let Ok(gtk_css) = std::fs::read_to_string(home.join(".config/gtk-4.0/gtk.css")) {
         if let Some(v) = extract_px(&gtk_css, "window.background { border-radius:") {
             vals.window_radius = v;
         }
@@ -799,7 +651,7 @@ fn load_saved_values() -> SavedValues {
 
     // Parse Shell CSS
     let shell_path = home
-        .join(SHELL_THEME_DIR)
+        .join(".local/share/themes/GNOME-X-Custom/gnome-shell")
         .join("gnome-shell.css");
     if let Ok(shell_css) = std::fs::read_to_string(shell_path) {
         // Panel opacity: alpha(#xxx, 0.8) → 80
@@ -910,7 +762,7 @@ fn extract_wallpaper_colors(
             continue;
         }
         let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
-        let (h, s, v) = rgb_to_hsv(r, g, b);
+        let (h, s, v) = gnomex_domain::color::rgb_to_hsv(r, g, b);
 
         // Skip near-grey, very dark, or very bright pixels
         if s < 15 || v < 25 || v > 240 {
@@ -936,7 +788,7 @@ fn extract_wallpaper_colors(
         let h = *hue_bin + 5;
         let s = (*sat_bin as u16) * 85 + 42;
         let v = (*val_bin as u16) * 85 + 42;
-        let (r, g, b) = hsv_to_rgb(h, s.min(255) as u8, v.min(255) as u8);
+        let (r, g, b) = gnomex_domain::color::hsv_to_rgb(h, s.min(255) as u8, v.min(255) as u8);
         let hex = format!("#{:02x}{:02x}{:02x}", r, g, b);
 
         // Map to closest GNOME accent color
@@ -959,15 +811,16 @@ fn extract_wallpaper_colors(
 
 /// Find the closest GNOME accent color for an RGB value.
 fn closest_accent(r: u8, g: u8, b: u8) -> String {
+    use gnomex_domain::color::color_distance;
+
     let mut best_id = "blue";
     let mut best_dist = u32::MAX;
 
     for &(id, _, hex) in ACCENT_COLORS {
-        let accent = parse_hex(hex);
-        let dr = (r as i32 - accent.0 as i32).unsigned_abs();
-        let dg = (g as i32 - accent.1 as i32).unsigned_abs();
-        let db = (b as i32 - accent.2 as i32).unsigned_abs();
-        let dist = dr * dr + dg * dg + db * db;
+        let accent = gnomex_domain::HexColor::new(hex)
+            .map(|c| c.to_rgb())
+            .unwrap_or((0, 0, 0));
+        let dist = color_distance((r, g, b), accent);
         if dist < best_dist {
             best_dist = dist;
             best_id = id;
@@ -977,79 +830,7 @@ fn closest_accent(r: u8, g: u8, b: u8) -> String {
     best_id.to_owned()
 }
 
-fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (u16, u8, u8) {
-    let (r, g, b) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let delta = max - min;
-
-    let h = if delta < 0.001 {
-        0.0
-    } else if (max - r).abs() < 0.001 {
-        60.0 * (((g - b) / delta) % 6.0)
-    } else if (max - g).abs() < 0.001 {
-        60.0 * (((b - r) / delta) + 2.0)
-    } else {
-        60.0 * (((r - g) / delta) + 4.0)
-    };
-    let h = if h < 0.0 { h + 360.0 } else { h };
-
-    let s = if max < 0.001 { 0.0 } else { delta / max };
-
-    (h as u16, (s * 255.0) as u8, (max * 255.0) as u8)
-}
-
-fn hsv_to_rgb(h: u16, s: u8, v: u8) -> (u8, u8, u8) {
-    let (s, v) = (s as f32 / 255.0, v as f32 / 255.0);
-    let h = h as f32;
-    let c = v * s;
-    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
-    let m = v - c;
-
-    let (r, g, b) = match h as u16 {
-        0..=59 => (c, x, 0.0),
-        60..=119 => (x, c, 0.0),
-        120..=179 => (0.0, c, x),
-        180..=239 => (0.0, x, c),
-        240..=299 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-
-    (
-        ((r + m) * 255.0) as u8,
-        ((g + m) * 255.0) as u8,
-        ((b + m) * 255.0) as u8,
-    )
-}
-
-// --- Color blending utilities ---
-
-/// Parse a `#rrggbb` hex string into (r, g, b) tuple.
-fn parse_hex(hex: &str) -> (u8, u8, u8) {
-    let hex = hex.trim_start_matches('#');
-    if hex.len() < 6 {
-        return (0, 0, 0);
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
-    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
-    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
-    (r, g, b)
-}
-
-/// Blend two colors: `mix(base, accent, pct)` where pct is 0.0..1.0.
-/// Returns a `#rrggbb` string.
-fn blend(base: (u8, u8, u8), accent: (u8, u8, u8), pct: f32) -> String {
-    let mix = |b: u8, a: u8| -> u8 {
-        let v = (b as f32) * (1.0 - pct) + (a as f32) * pct;
-        (v.round() as u8).min(255)
-    };
-    format!(
-        "#{:02x}{:02x}{:02x}",
-        mix(base.0, accent.0),
-        mix(base.1, accent.1),
-        mix(base.2, accent.2),
-    )
-}
+// Color utilities delegate to gnomex_domain::color
 
 /// Convenience re-export of dirs for home directory.
 mod dirs {

@@ -64,7 +64,7 @@ impl SimpleComponent for AppModel {
             });
 
         let theme_builder = ThemeBuilderModel::builder()
-            .launch(())
+            .launch(services.clone())
             .forward(sender.input_sender(), |msg| match msg {
                 ThemeBuilderOutput::Toast(s) => AppMsg::Toast(s),
             });
