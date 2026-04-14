@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Main application component — owns the AdwViewSwitcher navigation and
-//! top-level page switching between Explore, Installed, Packs, and Settings.
+//! top-level page switching.
 
 use crate::components::explore::{ExploreModel, ExploreOutput};
 use crate::components::installed::{InstalledModel, InstalledOutput};
 use crate::components::packs::{PacksModel, PacksOutput};
 use crate::components::settings::SettingsModel;
+use crate::components::theme_builder::{ThemeBuilderModel, ThemeBuilderOutput};
 use crate::services::AppServices;
 use adw::prelude::*;
 use relm4::prelude::*;
@@ -17,6 +18,8 @@ pub struct AppModel {
     explore: Controller<ExploreModel>,
     #[allow(dead_code)]
     installed: Controller<InstalledModel>,
+    #[allow(dead_code)]
+    theme_builder: Controller<ThemeBuilderModel>,
     #[allow(dead_code)]
     packs: Controller<PacksModel>,
     #[allow(dead_code)]
@@ -58,6 +61,12 @@ impl SimpleComponent for AppModel {
             .launch(services.clone())
             .forward(sender.input_sender(), |msg| match msg {
                 InstalledOutput::Toast(s) => AppMsg::Toast(s),
+            });
+
+        let theme_builder = ThemeBuilderModel::builder()
+            .launch(())
+            .forward(sender.input_sender(), |msg| match msg {
+                ThemeBuilderOutput::Toast(s) => AppMsg::Toast(s),
             });
 
         let packs = PacksModel::builder()
@@ -104,6 +113,12 @@ impl SimpleComponent for AppModel {
             "view-grid-symbolic",
         );
         view_stack.add_titled_with_icon(
+            theme_builder.widget(),
+            Some("theme-builder"),
+            "Theme",
+            "applications-graphics-symbolic",
+        );
+        view_stack.add_titled_with_icon(
             packs.widget(),
             Some("packs"),
             "Packs",
@@ -119,6 +134,7 @@ impl SimpleComponent for AppModel {
         let model = AppModel {
             explore,
             installed,
+            theme_builder,
             packs,
             settings,
             toast_overlay: toast_overlay.clone(),

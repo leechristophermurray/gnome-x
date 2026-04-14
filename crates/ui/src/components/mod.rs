@@ -9,3 +9,4 @@ pub mod installed;
 pub mod pack_row;
 pub mod packs;
 pub mod settings;
+pub mod theme_builder;
