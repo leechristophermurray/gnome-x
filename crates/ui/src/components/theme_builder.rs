@@ -94,6 +94,20 @@ impl SimpleComponent for ThemeBuilderModel {
             .spacing(24)
             .build();
 
+        // === Detected version banner ===
+        let version_banner = adw::ActionRow::builder()
+            .title("Desktop Environment")
+            .subtitle(&format!(
+                "{} \u{2014} theme engine adapter active",
+                services.detected_gnome_version,
+            ))
+            .css_classes(["property"])
+            .build();
+        version_banner.add_prefix(
+            &gtk::Image::from_icon_name("computer-symbolic"),
+        );
+        outer.append(&version_banner);
+
         // === Accent Color section ===
         let accent_group = adw::PreferencesGroup::builder()
             .title("Accent Color")
