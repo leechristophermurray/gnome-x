@@ -26,6 +26,8 @@ const ACCENT_COLORS: &[(&str, &str, &str)] = &[
 
 /// Current theme builder state.
 pub struct ThemeBuilderModel {
+    // Wallpaper color swatches container
+    wallpaper_swatches: gtk::Box,
     // Radii (px)
     window_radius: f64,
     element_radius: f64,
@@ -43,6 +45,8 @@ pub struct ThemeBuilderModel {
 #[derive(Debug)]
 pub enum ThemeBuilderMsg {
     SetAccentColor(String),
+    ExtractFromWallpaper,
+    WallpaperColorsReady(Vec<(String, String)>), // Vec<(hex, closest_accent_id)>
     SetWindowRadius(f64),
     SetElementRadius(f64),
     SetPanelRadius(f64),
@@ -161,6 +165,41 @@ impl SimpleComponent for ThemeBuilderModel {
 
         accent_row.add_suffix(&color_box);
         accent_group.add(&accent_row);
+
+        // "Material You" — extract colors from wallpaper
+        let wallpaper_row = adw::ActionRow::builder()
+            .title("From Wallpaper")
+            .subtitle("Extract accent colors from your desktop wallpaper")
+            .build();
+
+        let wallpaper_action_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .valign(gtk::Align::Center)
+            .build();
+
+        let wallpaper_swatches = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(4)
+            .valign(gtk::Align::Center)
+            .build();
+        wallpaper_action_box.append(&wallpaper_swatches);
+
+        let extract_btn = gtk::Button::builder()
+            .label("Extract")
+            .css_classes(["flat"])
+            .build();
+        {
+            let sender = sender.clone();
+            extract_btn.connect_clicked(move |_| {
+                sender.input(ThemeBuilderMsg::ExtractFromWallpaper);
+            });
+        }
+        wallpaper_action_box.append(&extract_btn);
+
+        wallpaper_row.add_suffix(&wallpaper_action_box);
+        accent_group.add(&wallpaper_row);
+
         outer.append(&accent_group);
 
         // === Radii section ===
@@ -360,6 +399,7 @@ impl SimpleComponent for ThemeBuilderModel {
         root.append(&scroll);
 
         let model = ThemeBuilderModel {
+            wallpaper_swatches: wallpaper_swatches.clone(),
             window_radius: saved.window_radius,
             element_radius: saved.element_radius,
             panel_radius: saved.panel_radius,
@@ -380,6 +420,82 @@ impl SimpleComponent for ThemeBuilderModel {
                 match iface.set_string("accent-color", &color) {
                     Ok(_) => tracing::info!("accent color set to: {color}"),
                     Err(e) => tracing::warn!("failed to set accent color: {e}"),
+                }
+            }
+            ThemeBuilderMsg::ExtractFromWallpaper => {
+                let bg = gio::Settings::new("org.gnome.desktop.background");
+                let uri = bg.string("picture-uri").to_string();
+                let path = uri
+                    .strip_prefix("file://")
+                    .unwrap_or(&uri)
+                    .to_owned();
+
+                let sender = sender.input_sender().clone();
+                // Run extraction off the main thread since it loads an image
+                std::thread::spawn(move || {
+                    match extract_wallpaper_colors(&path) {
+                        Ok(colors) => sender.emit(ThemeBuilderMsg::WallpaperColorsReady(colors)),
+                        Err(e) => {
+                            tracing::warn!("wallpaper extraction failed: {e}");
+                        }
+                    }
+                });
+            }
+            ThemeBuilderMsg::WallpaperColorsReady(colors) => {
+                // Clear previous swatches
+                while let Some(child) = self.wallpaper_swatches.first_child() {
+                    self.wallpaper_swatches.remove(&child);
+                }
+
+                // Create clickable color swatches
+                for (hex, accent_id) in &colors {
+                    let btn = gtk::Button::builder()
+                        .width_request(28)
+                        .height_request(28)
+                        .tooltip_text(&format!("{hex} \u{2192} {accent_id}"))
+                        .build();
+
+                    let css_class = format!(
+                        "wallpaper-swatch-{}",
+                        hex.trim_start_matches('#')
+                    );
+                    btn.add_css_class(&css_class);
+
+                    let css_provider = gtk::CssProvider::new();
+                    css_provider.load_from_string(&format!(
+                        ".{css_class} {{ \
+                            background: {hex}; \
+                            border-radius: 50%; \
+                            min-width: 24px; \
+                            min-height: 24px; \
+                            padding: 0; \
+                            border: 2px solid rgba(255,255,255,0.3); \
+                        }}"
+                    ));
+                    gtk::style_context_add_provider_for_display(
+                        &gtk::gdk::Display::default().unwrap(),
+                        &css_provider,
+                        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                    );
+
+                    let sender = sender.clone();
+                    let aid = accent_id.clone();
+                    btn.connect_clicked(move |_| {
+                        sender.input(ThemeBuilderMsg::SetAccentColor(aid.clone()));
+                    });
+
+                    self.wallpaper_swatches.append(&btn);
+                }
+
+                if colors.is_empty() {
+                    let _ = sender.output(ThemeBuilderOutput::Toast(
+                        "No colors extracted".into(),
+                    ));
+                } else {
+                    let _ = sender.output(ThemeBuilderOutput::Toast(format!(
+                        "Extracted {} colors from wallpaper",
+                        colors.len()
+                    )));
                 }
             }
             ThemeBuilderMsg::SetWindowRadius(v) => {
@@ -769,6 +885,141 @@ fn extract_panel_radius(css: &str) -> Option<f64> {
     } else {
         None
     }
+}
+
+// --- Wallpaper color extraction (Material You style) ---
+
+/// Extract dominant colors from a wallpaper image and map them to GNOME accent colors.
+/// Returns up to 5 color swatches as (hex, closest_accent_id) pairs.
+fn extract_wallpaper_colors(
+    path: &str,
+) -> Result<Vec<(String, String)>, String> {
+    // Load and downscale image for fast processing
+    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(path, 64, 64, true)
+        .map_err(|e| format!("failed to load wallpaper: {e}"))?;
+
+    let pixels = pixbuf.pixel_bytes().ok_or("no pixel data")?;
+    let channels = pixbuf.n_channels() as usize;
+    let data = pixels.as_ref();
+
+    // Collect pixel colors as (H, S, V) with enough saturation to be interesting
+    let mut color_buckets: std::collections::HashMap<(u16, u8, u8), u32> = std::collections::HashMap::new();
+
+    for chunk in data.chunks_exact(channels) {
+        if channels < 3 {
+            continue;
+        }
+        let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
+        let (h, s, v) = rgb_to_hsv(r, g, b);
+
+        // Skip near-grey, very dark, or very bright pixels
+        if s < 15 || v < 25 || v > 240 {
+            continue;
+        }
+
+        // Bucket: hue in 10-degree bins, saturation in 3 bins, value in 3 bins
+        let hue_bin = (h / 10) * 10;
+        let sat_bin = (s / 85).min(2);
+        let val_bin = (v / 85).min(2);
+        *color_buckets.entry((hue_bin, sat_bin, val_bin)).or_default() += 1;
+    }
+
+    // Sort by frequency, take top clusters
+    let mut buckets: Vec<_> = color_buckets.into_iter().collect();
+    buckets.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let mut results = Vec::new();
+    let mut used_accents = std::collections::HashSet::new();
+
+    for ((hue_bin, sat_bin, val_bin), _count) in buckets.iter().take(15) {
+        // Reconstruct a representative color from the bucket center
+        let h = *hue_bin + 5;
+        let s = (*sat_bin as u16) * 85 + 42;
+        let v = (*val_bin as u16) * 85 + 42;
+        let (r, g, b) = hsv_to_rgb(h, s.min(255) as u8, v.min(255) as u8);
+        let hex = format!("#{:02x}{:02x}{:02x}", r, g, b);
+
+        // Map to closest GNOME accent color
+        let accent_id = closest_accent(r, g, b);
+
+        // Only include each accent once
+        if used_accents.contains(&accent_id) {
+            continue;
+        }
+        used_accents.insert(accent_id.clone());
+        results.push((hex, accent_id));
+
+        if results.len() >= 5 {
+            break;
+        }
+    }
+
+    Ok(results)
+}
+
+/// Find the closest GNOME accent color for an RGB value.
+fn closest_accent(r: u8, g: u8, b: u8) -> String {
+    let mut best_id = "blue";
+    let mut best_dist = u32::MAX;
+
+    for &(id, _, hex) in ACCENT_COLORS {
+        let accent = parse_hex(hex);
+        let dr = (r as i32 - accent.0 as i32).unsigned_abs();
+        let dg = (g as i32 - accent.1 as i32).unsigned_abs();
+        let db = (b as i32 - accent.2 as i32).unsigned_abs();
+        let dist = dr * dr + dg * dg + db * db;
+        if dist < best_dist {
+            best_dist = dist;
+            best_id = id;
+        }
+    }
+
+    best_id.to_owned()
+}
+
+fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (u16, u8, u8) {
+    let (r, g, b) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    let h = if delta < 0.001 {
+        0.0
+    } else if (max - r).abs() < 0.001 {
+        60.0 * (((g - b) / delta) % 6.0)
+    } else if (max - g).abs() < 0.001 {
+        60.0 * (((b - r) / delta) + 2.0)
+    } else {
+        60.0 * (((r - g) / delta) + 4.0)
+    };
+    let h = if h < 0.0 { h + 360.0 } else { h };
+
+    let s = if max < 0.001 { 0.0 } else { delta / max };
+
+    (h as u16, (s * 255.0) as u8, (max * 255.0) as u8)
+}
+
+fn hsv_to_rgb(h: u16, s: u8, v: u8) -> (u8, u8, u8) {
+    let (s, v) = (s as f32 / 255.0, v as f32 / 255.0);
+    let h = h as f32;
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+
+    let (r, g, b) = match h as u16 {
+        0..=59 => (c, x, 0.0),
+        60..=119 => (x, c, 0.0),
+        120..=179 => (0.0, c, x),
+        180..=239 => (0.0, x, c),
+        240..=299 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+
+    (
+        ((r + m) * 255.0) as u8,
+        ((g + m) * 255.0) as u8,
+        ((b + m) * 255.0) as u8,
+    )
 }
 
 // --- Color blending utilities ---
