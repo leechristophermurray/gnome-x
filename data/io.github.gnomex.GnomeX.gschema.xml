@@ -109,16 +109,16 @@
       <summary>Window inset border width</summary>
     </key>
     <key name="tb-card-border-width" type="d">
-      <default>0.15</default>
-      <summary>Card border width fraction</summary>
+      <default>1.0</default>
+      <summary>Card border width in pixels</summary>
     </key>
     <key name="tb-separator-opacity" type="d">
       <default>1.0</default>
       <summary>Separator opacity fraction</summary>
     </key>
     <key name="tb-focus-ring-width" type="d">
-      <default>0.02</default>
-      <summary>Focus ring width fraction</summary>
+      <default>2.0</default>
+      <summary>Focus ring width in pixels</summary>
     </key>
     <key name="tb-combo-inset" type="b">
       <default>true</default>

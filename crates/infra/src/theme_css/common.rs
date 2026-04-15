@@ -86,9 +86,9 @@ pub fn gtk_csd_css(spec: &ThemeSpec) -> String {
         String::new()
     };
 
-    let card_border = insets.card_border_width.as_fraction();
+    let card_border = insets.card_border_width.as_i32();
     let sep_opacity = insets.separator_opacity.as_fraction();
-    let focus_width = (insets.focus_ring_width.as_fraction() * 100.0).round();
+    let focus_width = insets.focus_ring_width.as_i32();
 
     let combo_css = if !insets.combo_inset {
         "button.combo, .dropdown { border: none; box-shadow: none; }"

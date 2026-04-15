@@ -129,9 +129,9 @@ pub struct WindowFrameSpec {
 /// Visual inset controls for cards, separators, focus rings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InsetSpec {
-    pub card_border_width: Opacity,
+    pub card_border_width: Radius,
     pub separator_opacity: Opacity,
-    pub focus_ring_width: Opacity,
+    pub focus_ring_width: Radius,
     pub combo_inset: bool,
 }
 
@@ -209,9 +209,9 @@ impl ThemeSpec {
                 inset_border: Radius(0.0),
             },
             insets: InsetSpec {
-                card_border_width: Opacity(0.15), // currentColor 15%
+                card_border_width: Radius(1.0),
                 separator_opacity: Opacity(1.0),
-                focus_ring_width: Opacity(0.02),  // 2px as fraction
+                focus_ring_width: Radius(2.0),
                 combo_inset: true,
             },
             foreground: ForegroundSpec::default(),

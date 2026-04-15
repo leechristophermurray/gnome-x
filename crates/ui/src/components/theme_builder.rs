@@ -2083,9 +2083,9 @@ impl ThemeBuilderModel {
                 inset_border: Radius::new(self.inset_border)?,
             },
             insets: InsetSpec {
-                card_border_width: Opacity::from_fraction(self.card_border_width)?,
+                card_border_width: Radius::new(self.card_border_width)?,
                 separator_opacity: Opacity::from_fraction(self.separator_opacity)?,
-                focus_ring_width: Opacity::from_fraction(self.focus_ring_width)?,
+                focus_ring_width: Radius::new(self.focus_ring_width)?,
                 combo_inset: self.combo_inset,
             },
             foreground: gnomex_domain::ForegroundSpec::default(),
