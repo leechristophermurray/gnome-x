@@ -46,6 +46,7 @@ pub fn gtk_radius_css(spec: &ThemeSpec) -> String {
     let er = spec.element_radius.as_i32();
     format!(
         r#"/* Border radius */
+:root {{ --window-radius: {wr}px; }}
 window.background {{ border-radius: {wr}px; }}
 window.dialog {{ border-radius: {wr}px; }}
 button {{ border-radius: {er}px; }}

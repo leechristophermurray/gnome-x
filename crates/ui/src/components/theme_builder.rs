@@ -2084,7 +2084,7 @@ impl ThemeBuilderModel {
             },
             insets: InsetSpec {
                 card_border_width: Radius::new(self.card_border_width)?,
-                separator_opacity: Opacity::from_fraction(self.separator_opacity)?,
+                separator_opacity: Opacity::from_percent(self.separator_opacity)?,
                 focus_ring_width: Radius::new(self.focus_ring_width)?,
                 combo_inset: self.combo_inset,
             },
