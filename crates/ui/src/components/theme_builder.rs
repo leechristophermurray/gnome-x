@@ -56,6 +56,14 @@ pub enum ThemeBuilderMsg {
     SetTintIntensity(f64),
     SetDashOpacity(f64),
     SetOverviewBlur(bool),
+    SetButtonLayout(String),
+    SetTitlebarDoubleClick(String),
+    SetTitlebarFont(String),
+    SetNightLight(bool),
+    SetNightLightTemp(u32),
+    SetNightLightAuto(bool),
+    SetOverAmplification(bool),
+    SetEventSounds(bool),
     SetColorScheme(String),
     SetFont(String),
     SetMonoFont(String),
@@ -574,6 +582,205 @@ impl SimpleComponent for ThemeBuilderModel {
         behavior_group.add(&hot_corners_switch);
         outer.append(&behavior_group);
 
+        // === Window Manager ===
+        let wm_group = adw::PreferencesGroup::builder()
+            .title("Window Titlebar")
+            .description("Titlebar buttons and actions")
+            .build();
+
+        let wm = gio::Settings::new("org.gnome.desktop.wm.preferences");
+
+        // Titlebar button layout
+        let current_layout = wm.string("button-layout").to_string();
+        let layout_row = adw::ComboRow::builder()
+            .title("Button Layout")
+            .subtitle("Position of window control buttons")
+            .build();
+        let layout_options = gtk::StringList::new(&[
+            "Close only (right)",
+            "Minimize, Close (right)",
+            "Minimize, Maximize, Close (right)",
+            "Close (left)",
+            "Close, Minimize (left)",
+            "Close, Minimize, Maximize (left)",
+        ]);
+        layout_row.set_model(Some(&layout_options));
+        let layout_values = [
+            "appmenu:close",
+            "appmenu:minimize,close",
+            "appmenu:minimize,maximize,close",
+            "close:appmenu",
+            "close,minimize:appmenu",
+            "close,minimize,maximize:appmenu",
+        ];
+        let selected_layout = layout_values
+            .iter()
+            .position(|&v| v == current_layout)
+            .unwrap_or(2) as u32;
+        layout_row.set_selected(selected_layout);
+        {
+            let sender = sender.clone();
+            layout_row.connect_selected_notify(move |row| {
+                let idx = row.selected() as usize;
+                if let Some(&layout) = layout_values.get(idx) {
+                    sender.input(ThemeBuilderMsg::SetButtonLayout(layout.into()));
+                }
+            });
+        }
+        wm_group.add(&layout_row);
+
+        // Double-click titlebar action
+        let current_dbl = wm.string("action-double-click-titlebar").to_string();
+        let dbl_row = adw::ComboRow::builder()
+            .title("Double-Click Titlebar")
+            .subtitle("Action when double-clicking a window titlebar")
+            .build();
+        let dbl_options = gtk::StringList::new(&[
+            "Toggle Maximize",
+            "Minimize",
+            "Lower Window",
+            "Menu",
+            "None",
+        ]);
+        dbl_row.set_model(Some(&dbl_options));
+        let dbl_values = [
+            "toggle-maximize",
+            "minimize",
+            "lower",
+            "menu",
+            "none",
+        ];
+        let selected_dbl = dbl_values
+            .iter()
+            .position(|&v| v == current_dbl)
+            .unwrap_or(0) as u32;
+        dbl_row.set_selected(selected_dbl);
+        {
+            let sender = sender.clone();
+            dbl_row.connect_selected_notify(move |row| {
+                let idx = row.selected() as usize;
+                if let Some(&action) = dbl_values.get(idx) {
+                    sender.input(ThemeBuilderMsg::SetTitlebarDoubleClick(action.into()));
+                }
+            });
+        }
+        wm_group.add(&dbl_row);
+
+        // Titlebar font
+        let current_tb_font = wm.string("titlebar-font").to_string();
+        let tb_font_row = adw::ActionRow::builder()
+            .title("Titlebar Font")
+            .subtitle(&current_tb_font)
+            .build();
+        let tb_font_btn = gtk::FontDialogButton::builder()
+            .valign(gtk::Align::Center)
+            .build();
+        let tb_font_dialog = gtk::FontDialog::builder()
+            .title("Titlebar Font")
+            .build();
+        tb_font_btn.set_dialog(&tb_font_dialog);
+        if let Some(desc) = gtk::pango::FontDescription::from_string(&current_tb_font).into() {
+            tb_font_btn.set_font_desc(&desc);
+        }
+        {
+            let sender = sender.clone();
+            tb_font_btn.connect_font_desc_notify(move |btn| {
+                if let Some(desc) = btn.font_desc() {
+                    sender.input(ThemeBuilderMsg::SetTitlebarFont(desc.to_string()));
+                }
+            });
+        }
+        tb_font_row.add_suffix(&tb_font_btn);
+        wm_group.add(&tb_font_row);
+
+        outer.append(&wm_group);
+
+        // === Night Light ===
+        let nl_group = adw::PreferencesGroup::builder()
+            .title("Night Light")
+            .description("Reduce blue light in the evening")
+            .build();
+
+        let color_settings = gio::Settings::new("org.gnome.settings-daemon.plugins.color");
+
+        let nl_switch = adw::SwitchRow::builder()
+            .title("Night Light")
+            .subtitle("Warm the screen color to reduce eye strain at night")
+            .active(color_settings.boolean("night-light-enabled"))
+            .build();
+        {
+            let sender = sender.clone();
+            nl_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetNightLight(row.is_active()));
+            });
+        }
+        nl_group.add(&nl_switch);
+
+        let current_temp = color_settings.uint("night-light-temperature") as f64;
+        let temp_row = build_spin_row(
+            "Color Temperature",
+            "Lower values are warmer (1000\u{2013}6500 K)",
+            1000.0, 6500.0, current_temp, 100.0,
+        );
+        {
+            let sender = sender.clone();
+            temp_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetNightLightTemp(row.value() as u32));
+            });
+        }
+        nl_group.add(&temp_row);
+
+        let nl_auto = adw::SwitchRow::builder()
+            .title("Automatic Schedule")
+            .subtitle("Use sunrise and sunset times based on location")
+            .active(color_settings.boolean("night-light-schedule-automatic"))
+            .build();
+        {
+            let sender = sender.clone();
+            nl_auto.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetNightLightAuto(row.is_active()));
+            });
+        }
+        nl_group.add(&nl_auto);
+
+        outer.append(&nl_group);
+
+        // === Sound ===
+        let sound_group = adw::PreferencesGroup::builder()
+            .title("Sound")
+            .description("Audio feedback settings")
+            .build();
+
+        let sound_settings = gio::Settings::new("org.gnome.desktop.sound");
+
+        let overamp_switch = adw::SwitchRow::builder()
+            .title("Allow Volume Above 100%")
+            .subtitle("Enable amplification beyond the default maximum")
+            .active(sound_settings.boolean("allow-volume-above-100-percent"))
+            .build();
+        {
+            let sender = sender.clone();
+            overamp_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetOverAmplification(row.is_active()));
+            });
+        }
+        sound_group.add(&overamp_switch);
+
+        let event_sounds_switch = adw::SwitchRow::builder()
+            .title("Event Sounds")
+            .subtitle("Play sounds for system events like alerts and notifications")
+            .active(sound_settings.boolean("event-sounds"))
+            .build();
+        {
+            let sender = sender.clone();
+            event_sounds_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetEventSounds(row.is_active()));
+            });
+        }
+        sound_group.add(&event_sounds_switch);
+
+        outer.append(&sound_group);
+
         // === Action buttons ===
         let action_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -744,6 +951,46 @@ impl SimpleComponent for ThemeBuilderModel {
             }
             ThemeBuilderMsg::SetDashOpacity(v) => self.dash_opacity = v,
             ThemeBuilderMsg::SetOverviewBlur(v) => self.overview_blur = v,
+            ThemeBuilderMsg::SetButtonLayout(layout) => {
+                let wm = gio::Settings::new("org.gnome.desktop.wm.preferences");
+                let _ = wm.set_string("button-layout", &layout);
+                tracing::info!("button layout: {layout}");
+            }
+            ThemeBuilderMsg::SetTitlebarDoubleClick(action) => {
+                let wm = gio::Settings::new("org.gnome.desktop.wm.preferences");
+                let _ = wm.set_string("action-double-click-titlebar", &action);
+                tracing::info!("titlebar double-click: {action}");
+            }
+            ThemeBuilderMsg::SetTitlebarFont(font) => {
+                let wm = gio::Settings::new("org.gnome.desktop.wm.preferences");
+                let _ = wm.set_string("titlebar-font", &font);
+                tracing::info!("titlebar font: {font}");
+            }
+            ThemeBuilderMsg::SetNightLight(enabled) => {
+                let cs = gio::Settings::new("org.gnome.settings-daemon.plugins.color");
+                let _ = cs.set_boolean("night-light-enabled", enabled);
+                tracing::info!("night light: {enabled}");
+            }
+            ThemeBuilderMsg::SetNightLightTemp(temp) => {
+                let cs = gio::Settings::new("org.gnome.settings-daemon.plugins.color");
+                let _ = cs.set_uint("night-light-temperature", temp);
+                tracing::info!("night light temp: {temp}K");
+            }
+            ThemeBuilderMsg::SetNightLightAuto(auto) => {
+                let cs = gio::Settings::new("org.gnome.settings-daemon.plugins.color");
+                let _ = cs.set_boolean("night-light-schedule-automatic", auto);
+                tracing::info!("night light auto schedule: {auto}");
+            }
+            ThemeBuilderMsg::SetOverAmplification(enabled) => {
+                let sound = gio::Settings::new("org.gnome.desktop.sound");
+                let _ = sound.set_boolean("allow-volume-above-100-percent", enabled);
+                tracing::info!("over-amplification: {enabled}");
+            }
+            ThemeBuilderMsg::SetEventSounds(enabled) => {
+                let sound = gio::Settings::new("org.gnome.desktop.sound");
+                let _ = sound.set_boolean("event-sounds", enabled);
+                tracing::info!("event sounds: {enabled}");
+            }
             ThemeBuilderMsg::SetColorScheme(scheme) => {
                 let iface = gio::Settings::new("org.gnome.desktop.interface");
                 let _ = iface.set_string("color-scheme", &scheme);
