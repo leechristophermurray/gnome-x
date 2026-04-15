@@ -41,6 +41,17 @@ install -Dm644 data/icons/symbolic/apps/io.github.gnomex.GnomeX-symbolic.svg \
 install -Dm644 data/icons/128x128/apps/io.github.gnomex.GnomeX.png \
     "${DATADIR}/icons/hicolor/128x128/apps/io.github.gnomex.GnomeX.png"
 
+# Systemd user timer for background accent scheduling
+SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
+mkdir -p "${SYSTEMD_USER_DIR}"
+install -Dm644 data/systemd/gnome-x-accent-scheduler.service \
+    "${SYSTEMD_USER_DIR}/gnome-x-accent-scheduler.service"
+install -Dm644 data/systemd/gnome-x-accent-scheduler.timer \
+    "${SYSTEMD_USER_DIR}/gnome-x-accent-scheduler.timer"
+systemctl --user daemon-reload || true
+systemctl --user enable --now gnome-x-accent-scheduler.timer || true
+echo "Enabled accent scheduler timer (runs every 5 minutes)"
+
 # Update caches
 if command -v gtk-update-icon-cache &>/dev/null; then
     gtk-update-icon-cache -f -t "${DATADIR}/icons/hicolor" || true

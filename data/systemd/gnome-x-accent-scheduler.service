@@ -1,0 +1,24 @@
+[Unit]
+Description=GNOME X Accent Color Scheduler
+Documentation=https://github.com/gnomex/gnome-x
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '\
+  ENABLED=$(gsettings get io.github.gnomex.GnomeX scheduled-accent-enabled 2>/dev/null); \
+  if [ "$ENABLED" != "true" ]; then exit 0; fi; \
+  FROM=$(gsettings get org.gnome.settings-daemon.plugins.color night-light-schedule-from 2>/dev/null | tr -d " "); \
+  TO=$(gsettings get org.gnome.settings-daemon.plugins.color night-light-schedule-to 2>/dev/null | tr -d " "); \
+  NOW_H=$(date +%%H); NOW_M=$(date +%%M); \
+  NOW=$(echo "$NOW_H + $NOW_M / 60" | bc -l); \
+  DAY=$(gsettings get io.github.gnomex.GnomeX day-accent-color 2>/dev/null | tr -d "'\''"); \
+  NIGHT=$(gsettings get io.github.gnomex.GnomeX night-accent-color 2>/dev/null | tr -d "'\''"); \
+  if echo "$FROM > $TO" | bc -l | grep -q 1; then \
+    if echo "$NOW >= $FROM || $NOW < $TO" | bc -l | grep -q 1; then TARGET=$NIGHT; else TARGET=$DAY; fi; \
+  else \
+    if echo "$NOW >= $FROM && $NOW < $TO" | bc -l | grep -q 1; then TARGET=$NIGHT; else TARGET=$DAY; fi; \
+  fi; \
+  CURRENT=$(gsettings get org.gnome.desktop.interface accent-color 2>/dev/null | tr -d "'\''"); \
+  if [ "$CURRENT" != "$TARGET" ]; then \
+    gsettings set org.gnome.desktop.interface accent-color "$TARGET"; \
+  fi'

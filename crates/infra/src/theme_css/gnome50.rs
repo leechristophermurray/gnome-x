@@ -9,7 +9,7 @@
 //! - `prefers-reduced-motion` guard on blur/animation CSS
 //! - Wayland-only (no X11 fallback paths)
 
-use super::common::{gtk_radius_css, gtk_tint_css};
+use super::common::{gtk_csd_css, gtk_radius_css, gtk_tint_css};
 use gnomex_app::ports::{ThemeCss, ThemeCssGenerator};
 use gnomex_app::AppError;
 use gnomex_domain::ThemeSpec;
@@ -43,8 +43,9 @@ impl Gnome50CssGenerator {
         // No style-dark.css generation — Libadwaita 1.9 logs deprecation
         // warnings if it finds separate dark variant files.
         format!(
-            "/* GNOME X — GTK4 overrides (GNOME 50 / Libadwaita 1.9) */\n\n{}\n{}",
+            "/* GNOME X — GTK4 overrides */\n\n{}\n{}\n{}",
             gtk_radius_css(spec),
+            gtk_csd_css(spec),
             gtk_tint_css(spec),
         )
     }
@@ -125,26 +126,10 @@ impl Gnome50CssGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gnomex_domain::*;
+    use gnomex_domain::ThemeSpec;
 
     fn test_spec() -> ThemeSpec {
-        ThemeSpec {
-            window_radius: Radius::new(12.0).unwrap(),
-            element_radius: Radius::new(6.0).unwrap(),
-            panel: PanelSpec {
-                radius: Radius::new(0.0).unwrap(),
-                opacity: Opacity::from_percent(80.0).unwrap(),
-                tint: HexColor::new("#1a1a1e").unwrap(),
-            },
-            dash: DashSpec {
-                opacity: Opacity::from_percent(70.0).unwrap(),
-            },
-            tint: TintSpec {
-                accent_hex: HexColor::new("#3584e4").unwrap(),
-                intensity: Opacity::from_percent(5.0).unwrap(),
-            },
-            overview_blur: true,
-        }
+        ThemeSpec::defaults()
     }
 
     #[test]

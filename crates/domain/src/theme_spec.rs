@@ -106,6 +106,61 @@ pub struct TintSpec {
     pub intensity: Opacity,
 }
 
+/// Headerbar / CSD customization values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeaderbarSpec {
+    /// Minimum height in pixels (default 47, compact ~30).
+    pub min_height: Radius,
+    /// Drop shadow intensity below the headerbar (0.0 = flat, 1.0 = full).
+    pub shadow_intensity: Opacity,
+    /// Whether titlebar close/min/max buttons are circular.
+    pub circular_buttons: bool,
+}
+
+/// Window frame customization values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowFrameSpec {
+    /// Whether to show the CSD drop shadow around windows.
+    pub show_shadow: bool,
+    /// Inset border width (0 = no visible border, 1 = thin line).
+    pub inset_border: Radius,
+}
+
+/// Visual inset controls for cards, separators, focus rings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InsetSpec {
+    pub card_border_width: Opacity,
+    pub separator_opacity: Opacity,
+    pub focus_ring_width: Opacity,
+    pub combo_inset: bool,
+}
+
+/// Foreground / text color overrides (None = use Adwaita defaults).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ForegroundSpec {
+    pub window_fg: Option<HexColor>,
+    pub view_fg: Option<HexColor>,
+    pub headerbar_fg: Option<HexColor>,
+    pub headerbar_border: Option<HexColor>,
+    pub sidebar_fg: Option<HexColor>,
+}
+
+/// Semantic status color overrides (None = use Adwaita defaults).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct StatusColorSpec {
+    pub destructive: Option<HexColor>,
+    pub success: Option<HexColor>,
+    pub warning: Option<HexColor>,
+    pub error: Option<HexColor>,
+}
+
+/// Notification / calendar / OSD shell styling.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NotificationSpec {
+    pub radius: Radius,
+    pub opacity: Opacity,
+}
+
 /// A complete, version-independent theme specification.
 ///
 /// Contains all the values the user has set via the Theme Builder.
@@ -118,6 +173,12 @@ pub struct ThemeSpec {
     pub panel: PanelSpec,
     pub dash: DashSpec,
     pub tint: TintSpec,
+    pub headerbar: HeaderbarSpec,
+    pub window_frame: WindowFrameSpec,
+    pub insets: InsetSpec,
+    pub foreground: ForegroundSpec,
+    pub status_colors: StatusColorSpec,
+    pub notifications: NotificationSpec,
     pub overview_blur: bool,
 }
 
@@ -137,6 +198,27 @@ impl ThemeSpec {
             tint: TintSpec {
                 accent_hex: HexColor("#3584e4".into()),
                 intensity: Opacity(0.05),
+            },
+            headerbar: HeaderbarSpec {
+                min_height: Radius(47.0),
+                shadow_intensity: Opacity(1.0),
+                circular_buttons: false,
+            },
+            window_frame: WindowFrameSpec {
+                show_shadow: true,
+                inset_border: Radius(0.0),
+            },
+            insets: InsetSpec {
+                card_border_width: Opacity(0.15), // currentColor 15%
+                separator_opacity: Opacity(1.0),
+                focus_ring_width: Opacity(0.02),  // 2px as fraction
+                combo_inset: true,
+            },
+            foreground: ForegroundSpec::default(),
+            status_colors: StatusColorSpec::default(),
+            notifications: NotificationSpec {
+                radius: Radius(12.0),
+                opacity: Opacity(0.95),
             },
             overview_blur: true,
         }

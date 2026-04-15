@@ -3,7 +3,7 @@
 
 //! Shared CSS generation helpers used across all GNOME version adapters.
 
-use gnomex_domain::{color::blend, ThemeSpec};
+use gnomex_domain::{color::blend, HexColor, ThemeSpec};
 
 /// Generate the GTK4/Libadwaita `@define-color` tinting block.
 /// This is identical across GNOME versions since it targets GTK, not Shell.
@@ -52,6 +52,121 @@ button {{ border-radius: {er}px; }}
 entry {{ border-radius: {er}px; }}
 .card {{ border-radius: {er}px; }}
 popover > contents {{ border-radius: {er}px; }}
+"#
+    )
+}
+
+/// Generate CSS for headerbar, window frame, and visual inset customizations.
+pub fn gtk_csd_css(spec: &ThemeSpec) -> String {
+    let hb = &spec.headerbar;
+    let wf = &spec.window_frame;
+    let insets = &spec.insets;
+
+    let hb_height = hb.min_height.as_i32();
+    let hb_shadow = hb.shadow_intensity.as_fraction();
+
+    let titlebar_btn_css = if hb.circular_buttons {
+        "headerbar button.titlebutton {\n    border-radius: 50%;\n    min-width: 14px;\n    min-height: 14px;\n    padding: 2px;\n}"
+    } else {
+        ""
+    };
+
+    let window_shadow = if wf.show_shadow {
+        ""
+    } else {
+        "window, window.csd, .window-frame {\n    box-shadow: none;\n    margin: 0;\n}"
+    };
+
+    let inset_border = wf.inset_border.as_i32();
+    let inset_css = if inset_border > 0 {
+        format!(
+            "window.csd {{ box-shadow: inset 0 0 0 {inset_border}px @borders; }}"
+        )
+    } else {
+        String::new()
+    };
+
+    let card_border = insets.card_border_width.as_fraction();
+    let sep_opacity = insets.separator_opacity.as_fraction();
+    let focus_width = (insets.focus_ring_width.as_fraction() * 100.0).round();
+
+    let combo_css = if !insets.combo_inset {
+        "button.combo, .dropdown { border: none; box-shadow: none; }"
+    } else {
+        ""
+    };
+
+    format!(
+        r#"/* Headerbar CSD */
+headerbar {{
+    min-height: {hb_height}px;
+    box-shadow: inset 0 -1px alpha(black, {hb_shadow});
+}}
+
+{titlebar_btn_css}
+
+{window_shadow}
+
+{inset_css}
+
+/* Card borders */
+.card {{ border: {card_border}px solid @borders; }}
+
+/* Separator visibility */
+separator {{ opacity: {sep_opacity}; }}
+
+/* Focus ring */
+*:focus-visible {{ outline-width: {focus_width}px; }}
+
+{combo_css}
+"#
+    )
+}
+
+/// Generate CSS for foreground/text and semantic status color overrides.
+pub fn gtk_color_overrides_css(spec: &ThemeSpec) -> String {
+    let mut css = String::new();
+    let fg = &spec.foreground;
+    let sc = &spec.status_colors;
+
+    fn color_line(name: &str, val: &Option<HexColor>) -> String {
+        match val {
+            Some(c) => format!("@define-color {name} {hex};\n", hex = c.as_str()),
+            None => String::new(),
+        }
+    }
+
+    css.push_str("/* Foreground overrides */\n");
+    css.push_str(&color_line("window_fg_color", &fg.window_fg));
+    css.push_str(&color_line("view_fg_color", &fg.view_fg));
+    css.push_str(&color_line("headerbar_fg_color", &fg.headerbar_fg));
+    css.push_str(&color_line("headerbar_border_color", &fg.headerbar_border));
+    css.push_str(&color_line("sidebar_fg_color", &fg.sidebar_fg));
+
+    css.push_str("\n/* Semantic status colors */\n");
+    css.push_str(&color_line("destructive_bg_color", &sc.destructive));
+    css.push_str(&color_line("success_bg_color", &sc.success));
+    css.push_str(&color_line("warning_bg_color", &sc.warning));
+    css.push_str(&color_line("error_bg_color", &sc.error));
+
+    css
+}
+
+/// Generate shell CSS for notification/calendar styling.
+pub fn shell_notification_css(spec: &ThemeSpec) -> String {
+    let nr = spec.notifications.radius.as_i32();
+    let no = spec.notifications.opacity.as_fraction();
+
+    format!(
+        r#"/* Notification / calendar styling */
+.notification-banner {{
+    border-radius: {nr}px;
+    background-color: alpha(@osd_bg_color, {no});
+}}
+
+.calendar, .world-clocks-button, .weather-button, .events-button {{
+    border-radius: {nr}px;
+}}
 "#
     )
 }

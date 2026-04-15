@@ -338,23 +338,9 @@ mod tests {
     #[test]
     fn cross_version_report() {
         use crate::*;
-        let spec = ThemeSpec {
-            window_radius: Radius::new(36.0).unwrap(), // exceeds GNOME 45's safe range
-            element_radius: Radius::new(6.0).unwrap(),
-            panel: PanelSpec {
-                radius: Radius::new(20.0).unwrap(), // exceeds GNOME 45-46's safe range
-                opacity: Opacity::from_percent(80.0).unwrap(),
-                tint: HexColor::new("#1a1a1e").unwrap(),
-            },
-            dash: DashSpec {
-                opacity: Opacity::from_percent(70.0).unwrap(),
-            },
-            tint: TintSpec {
-                accent_hex: HexColor::new("#3584e4").unwrap(),
-                intensity: Opacity::from_percent(5.0).unwrap(),
-            },
-            overview_blur: true,
-        };
+        let mut spec = ThemeSpec::defaults();
+        spec.window_radius = Radius::new(36.0).unwrap();  // exceeds GNOME 45's safe range
+        spec.panel.radius = Radius::new(20.0).unwrap();   // exceeds GNOME 45-46's safe range
 
         let report = compatibility_report(&spec);
         // Window radius 36 should flag GNOME 45 (safe range 0-24)

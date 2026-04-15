@@ -18,5 +18,119 @@
       <summary>Disable extension version validation</summary>
       <description>Allow installing extensions not marked compatible with the current GNOME Shell version</description>
     </key>
+    <key name="scheduled-accent-enabled" type="b">
+      <default>false</default>
+      <summary>Enable scheduled accent color</summary>
+      <description>Automatically switch between day and night accent colors based on time</description>
+    </key>
+    <key name="day-accent-color" type="s">
+      <default>'blue'</default>
+      <summary>Day accent color</summary>
+      <description>Accent color to use during daytime hours</description>
+    </key>
+    <key name="night-accent-color" type="s">
+      <default>'slate'</default>
+      <summary>Night accent color</summary>
+      <description>Accent color to use during nighttime hours</description>
+    </key>
+    <key name="shared-tinting-enabled" type="b">
+      <default>false</default>
+      <summary>Shared tinting</summary>
+      <description>Use accent color tint for shell panel and dash</description>
+    </key>
+    <key name="use-sunrise-sunset" type="b">
+      <default>false</default>
+      <summary>Use sunrise/sunset for schedule</summary>
+      <description>Use automatic sunrise/sunset times instead of fixed schedule</description>
+    </key>
+    <key name="scheduled-panel-enabled" type="b">
+      <default>false</default>
+      <summary>Enable scheduled panel tint</summary>
+      <description>Automatically switch panel tint color based on time of day</description>
+    </key>
+    <key name="day-panel-tint" type="s">
+      <default>'#1a1a1e'</default>
+      <summary>Day panel tint color</summary>
+    </key>
+    <key name="night-panel-tint" type="s">
+      <default>'#1a1a1e'</default>
+      <summary>Night panel tint color</summary>
+    </key>
+    <key name="tb-window-radius" type="d">
+      <default>12.0</default>
+      <summary>Window corner radius</summary>
+    </key>
+    <key name="tb-element-radius" type="d">
+      <default>6.0</default>
+      <summary>Element corner radius</summary>
+    </key>
+    <key name="tb-panel-radius" type="d">
+      <default>0.0</default>
+      <summary>Panel corner radius</summary>
+    </key>
+    <key name="tb-panel-opacity" type="d">
+      <default>80.0</default>
+      <summary>Panel opacity percent</summary>
+    </key>
+    <key name="tb-panel-tint" type="s">
+      <default>'#1a1a1e'</default>
+      <summary>Panel tint hex color</summary>
+    </key>
+    <key name="tb-tint-intensity" type="d">
+      <default>5.0</default>
+      <summary>Accent tint intensity percent</summary>
+    </key>
+    <key name="tb-dash-opacity" type="d">
+      <default>70.0</default>
+      <summary>Dash opacity percent</summary>
+    </key>
+    <key name="tb-overview-blur" type="b">
+      <default>true</default>
+      <summary>Overview background blur</summary>
+    </key>
+    <key name="tb-headerbar-height" type="d">
+      <default>47.0</default>
+      <summary>Headerbar minimum height</summary>
+    </key>
+    <key name="tb-headerbar-shadow" type="d">
+      <default>1.0</default>
+      <summary>Headerbar shadow intensity</summary>
+    </key>
+    <key name="tb-circular-buttons" type="b">
+      <default>false</default>
+      <summary>Circular window control buttons</summary>
+    </key>
+    <key name="tb-show-window-shadow" type="b">
+      <default>true</default>
+      <summary>Show CSD window drop shadow</summary>
+    </key>
+    <key name="tb-inset-border" type="d">
+      <default>0.0</default>
+      <summary>Window inset border width</summary>
+    </key>
+    <key name="tb-card-border-width" type="d">
+      <default>0.15</default>
+      <summary>Card border width fraction</summary>
+    </key>
+    <key name="tb-separator-opacity" type="d">
+      <default>1.0</default>
+      <summary>Separator opacity fraction</summary>
+    </key>
+    <key name="tb-focus-ring-width" type="d">
+      <default>0.02</default>
+      <summary>Focus ring width fraction</summary>
+    </key>
+    <key name="tb-combo-inset" type="b">
+      <default>true</default>
+      <summary>Show combo button inset border</summary>
+    </key>
+    <key name="tb-notification-radius" type="d">
+      <default>12.0</default>
+      <summary>Notification banner corner radius</summary>
+    </key>
+    <key name="tb-notification-opacity" type="d">
+      <default>0.95</default>
+      <summary>Notification banner opacity</summary>
+    </key>
   </schema>
 </schemalist>

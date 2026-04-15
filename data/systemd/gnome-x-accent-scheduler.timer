@@ -1,0 +1,11 @@
+[Unit]
+Description=GNOME X Accent Color Scheduler Timer
+Documentation=https://github.com/gnomex/gnome-x
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

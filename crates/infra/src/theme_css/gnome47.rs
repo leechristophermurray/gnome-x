@@ -5,7 +5,10 @@
 //! Shell changes: accent-color support, updated OSD/notification selectors.
 //! This is also the fallback for unrecognised future versions.
 
-use super::common::{gtk_radius_css, gtk_tint_css, tint_shell_surfaces};
+use super::common::{
+    gtk_csd_css, gtk_color_overrides_css, gtk_radius_css, gtk_tint_css,
+    shell_notification_css, tint_shell_surfaces,
+};
 use gnomex_app::ports::{ThemeCss, ThemeCssGenerator};
 use gnomex_app::AppError;
 use gnomex_domain::ThemeSpec;
@@ -28,8 +31,10 @@ impl ThemeCssGenerator for Gnome47CssGenerator {
 impl Gnome47CssGenerator {
     fn gtk(&self, spec: &ThemeSpec) -> String {
         format!(
-            "/* GNOME X — GTK4 overrides (GNOME 47+) */\n\n{}\n{}",
+            "/* GNOME X — GTK4 overrides (GNOME 47+) */\n\n{}\n{}\n{}\n{}",
             gtk_radius_css(spec),
+            gtk_csd_css(spec),
+            gtk_color_overrides_css(spec),
             gtk_tint_css(spec),
         )
     }
@@ -91,11 +96,14 @@ impl Gnome47CssGenerator {
 }}
 
 {blur}
+
+{notifications}
 "#,
             panel = s.panel,
             dash = s.dash,
             search = s.search,
             osd = s.osd,
+            notifications = shell_notification_css(spec),
         )
     }
 }

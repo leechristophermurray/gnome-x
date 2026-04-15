@@ -5,6 +5,7 @@
 //! Generates CSS overrides for window radius, element radius, panel styling,
 //! and accent-tinted surfaces (replaces Tint my Shell / Tint my GNOME).
 
+use crate::components::color_picker;
 use crate::services::AppServices;
 use adw::prelude::*;
 use gnomex_app::use_cases::ApplyThemeUseCase;
@@ -30,7 +31,8 @@ const ACCENT_COLORS: &[(&str, &str, &str)] = &[
 pub struct ThemeBuilderModel {
     apply_uc: Arc<ApplyThemeUseCase>,
     detected_version: String,
-    wallpaper_swatches: gtk::Box,
+    wallpaper_swatches: Vec<gtk::Box>, // one per extract row (single, day, night)
+    color_pickers: Vec<gtk::Box>,     // picker widgets to deselect on wallpaper pick
     // Raw slider values (validated into ThemeSpec on Apply)
     window_radius: f64,
     element_radius: f64,
@@ -40,6 +42,45 @@ pub struct ThemeBuilderModel {
     tint_intensity: f64,
     dash_opacity: f64,
     overview_blur: bool,
+    // Headerbar / CSD
+    headerbar_height: f64,
+    headerbar_shadow: f64,
+    circular_buttons: bool,
+    show_window_shadow: bool,
+    inset_border: f64,
+    // Visual insets
+    card_border_width: f64,
+    separator_opacity: f64,
+    focus_ring_width: f64,
+    combo_inset: bool,
+    // Notification
+    notification_radius: f64,
+    notification_opacity: f64,
+    // Scheduled accent
+    scheduled_accent_enabled: bool,
+    day_accent: String,
+    night_accent: String,
+    // Accent UI rows for dynamic visibility
+    single_color_row: adw::ActionRow,
+    single_wallpaper_row: adw::ActionRow,
+    day_accent_row: adw::ActionRow,
+    day_wp_row: adw::ActionRow,
+    night_accent_row: adw::ActionRow,
+    night_wp_row: adw::ActionRow,
+    sched_info_row: adw::ActionRow,
+    // Shared tinting — accent color drives panel/shell colors
+    shared_tinting: bool,
+    // Panel scheduling
+    use_accent_for_panel: bool,
+    scheduled_panel_enabled: bool,
+    day_panel_tint: String,
+    night_panel_tint: String,
+    // Widget refs for dynamic visibility
+    panel_tint_row: adw::ActionRow,
+    panel_use_accent_row: adw::SwitchRow,
+    panel_sched_row: adw::SwitchRow,
+    day_panel_row: adw::ActionRow,
+    night_panel_row: adw::ActionRow,
     compat_rows: HashMap<ThemeControlId, (adw::SpinRow, String)>, // (row, original_subtitle)
 }
 
@@ -56,6 +97,39 @@ pub enum ThemeBuilderMsg {
     SetTintIntensity(f64),
     SetDashOpacity(f64),
     SetOverviewBlur(bool),
+    SetSharedTinting(bool),
+    RefreshVisibility,
+    SetUseAccentForPanel(bool),
+    SetScheduledAccent(bool),
+    SetDayAccent(String),
+    SetNightAccent(String),
+    SetScheduledPanel(bool),
+    SetDayPanelTint(String),
+    SetNightPanelTint(String),
+    SetSunriseSunset(bool),
+    TickAccentSchedule,
+    // Headerbar / CSD
+    SetHeaderbarHeight(f64),
+    SetHeaderbarShadow(f64),
+    SetCircularButtons(bool),
+    SetShowWindowShadow(bool),
+    SetInsetBorder(f64),
+    // Visual Insets
+    SetCardBorderWidth(f64),
+    SetSeparatorOpacity(f64),
+    SetFocusRingWidth(f64),
+    SetComboInset(bool),
+    // Notifications
+    SetNotificationRadius(f64),
+    SetNotificationOpacity(f64),
+    // Window Behavior
+    SetEdgeTiling(bool),
+    SetCenterNewWindows(bool),
+    SetAttachModals(bool),
+    SetAutoMaximize(bool),
+    SetDraggableBorderWidth(i32),
+    SetDynamicWorkspaces(bool),
+    // WM
     SetButtonLayout(String),
     SetTitlebarDoubleClick(String),
     SetTitlebarFont(String),
@@ -99,20 +173,7 @@ impl SimpleComponent for ThemeBuilderModel {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let saved = load_saved_values();
-
-        let scroll = gtk::ScrolledWindow::builder().vexpand(true).build();
-        let clamp = adw::Clamp::builder()
-            .maximum_size(600)
-            .margin_top(24)
-            .margin_bottom(24)
-            .margin_start(24)
-            .margin_end(24)
-            .build();
-        let outer = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(24)
-            .build();
+        // All theme builder values now read from GSettings (tb-* keys)
 
         // === Detected version banner ===
         let version_banner = adw::ActionRow::builder()
@@ -126,97 +187,70 @@ impl SimpleComponent for ThemeBuilderModel {
         version_banner.add_prefix(
             &gtk::Image::from_icon_name("computer-symbolic"),
         );
-        outer.append(&version_banner);
+        // version_banner appended in final ordering below
 
-        // === Accent Color section ===
+        // === Unified Accent Color section ===
+        // Dynamically shows single or day/night pickers based on schedule toggle.
         let accent_group = adw::PreferencesGroup::builder()
             .title("Accent Color")
             .description("System highlight color used across all apps")
             .build();
 
-        let accent_row = adw::ActionRow::builder()
-            .title("Color")
-            .build();
-
-        let color_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
-            .valign(gtk::Align::Center)
-            .build();
-
         let iface = gio::Settings::new("org.gnome.desktop.interface");
         let current_accent = iface.string("accent-color").to_string();
 
-        for (i, &(id, label, hex)) in ACCENT_COLORS.iter().enumerate() {
-            let btn = gtk::ToggleButton::builder()
-                .width_request(32)
-                .height_request(32)
-                .tooltip_text(label)
-                .active(id == current_accent)
-                .build();
+        let app_settings = gio::Settings::new("io.github.gnomex.GnomeX");
+        let saved_day = app_settings.string("day-accent-color").to_string();
+        let saved_night = app_settings.string("night-accent-color").to_string();
+        let saved_sched_enabled = app_settings.boolean("scheduled-accent-enabled");
+        let initial_day = if saved_day.is_empty() { "blue".into() } else { saved_day };
+        let initial_night = if saved_night.is_empty() { "slate".into() } else { saved_night };
 
-            let css_class = format!("accent-{id}");
-            btn.add_css_class(&css_class);
-
-            let css_provider = gtk::CssProvider::new();
-            css_provider.load_from_string(&format!(
-                ".{css_class} {{ \
-                    background: {hex}; \
-                    border-radius: 50%; \
-                    min-width: 28px; \
-                    min-height: 28px; \
-                    padding: 0; \
-                    border: 2px solid transparent; \
-                }} \
-                .{css_class}:checked {{ \
-                    border-color: @theme_fg_color; \
-                }}"
-            ));
-            gtk::style_context_add_provider_for_display(
-                &gtk::gdk::Display::default().unwrap(),
-                &css_provider,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-
-            if i > 0 {
-                if let Some(first) = color_box.first_child() {
-                    btn.set_group(first.downcast_ref::<gtk::ToggleButton>());
-                }
-            }
-
+        // Schedule toggle
+        let sched_switch = adw::SwitchRow::builder()
+            .title("Schedule Accent Color")
+            .subtitle("Automatically switch between day and night colors")
+            .active(saved_sched_enabled)
+            .build();
+        {
             let sender = sender.clone();
-            let accent_id = id.to_owned();
-            btn.connect_toggled(move |b| {
-                if b.is_active() {
-                    sender.input(ThemeBuilderMsg::SetAccentColor(accent_id.clone()));
-                }
+            sched_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetScheduledAccent(row.is_active()));
             });
-
-            color_box.append(&btn);
         }
+        accent_group.add(&sched_switch);
 
-        accent_row.add_suffix(&color_box);
-        accent_group.add(&accent_row);
+        // --- Single color picker (shown when scheduler is OFF) ---
+        let single_color_row = adw::ActionRow::builder()
+            .title("Color")
+            .build();
+        let single_picker = {
+            let sender = sender.clone();
+            color_picker::build_color_picker(
+                &color_picker::accent_id_to_hex(&current_accent),
+                move |id, _hex| {
+                    sender.input(ThemeBuilderMsg::SetAccentColor(id));
+                },
+            )
+        };
+        single_color_row.add_suffix(&single_picker);
+        accent_group.add(&single_color_row);
 
-        // "Material You" — extract colors from wallpaper
-        let wallpaper_row = adw::ActionRow::builder()
+        let single_wallpaper_row = adw::ActionRow::builder()
             .title("From Wallpaper")
             .subtitle("Extract accent colors from your desktop wallpaper")
             .build();
-
-        let wallpaper_action_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .valign(gtk::Align::Center)
-            .build();
-
         let wallpaper_swatches = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(4)
             .valign(gtk::Align::Center)
             .build();
-        wallpaper_action_box.append(&wallpaper_swatches);
-
+        let single_wp_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .valign(gtk::Align::Center)
+            .build();
+        single_wp_box.append(&wallpaper_swatches);
         let extract_btn = gtk::Button::builder()
             .label("Extract")
             .css_classes(["flat"])
@@ -227,12 +261,143 @@ impl SimpleComponent for ThemeBuilderModel {
                 sender.input(ThemeBuilderMsg::ExtractFromWallpaper);
             });
         }
-        wallpaper_action_box.append(&extract_btn);
+        single_wp_box.append(&extract_btn);
+        single_wallpaper_row.add_suffix(&single_wp_box);
+        accent_group.add(&single_wallpaper_row);
 
-        wallpaper_row.add_suffix(&wallpaper_action_box);
-        accent_group.add(&wallpaper_row);
+        // --- Day color picker (shown when scheduler is ON) ---
+        let day_accent_row = adw::ActionRow::builder()
+            .title("Day Color")
+            .subtitle("Active during daytime hours")
+            .build();
+        let day_picker = {
+            let sender = sender.clone();
+            color_picker::build_color_picker(
+                &color_picker::accent_id_to_hex(&initial_day),
+                move |id, _hex| {
+                    sender.input(ThemeBuilderMsg::SetDayAccent(id));
+                },
+            )
+        };
+        day_accent_row.add_suffix(&day_picker);
+        accent_group.add(&day_accent_row);
 
-        outer.append(&accent_group);
+        let day_wp_row = adw::ActionRow::builder()
+            .title("Day \u{2014} From Wallpaper")
+            .subtitle("Extract day accent from wallpaper")
+            .build();
+        let day_wp_swatches = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(4)
+            .valign(gtk::Align::Center)
+            .build();
+        let day_wp_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .valign(gtk::Align::Center)
+            .build();
+        day_wp_box.append(&day_wp_swatches);
+        let day_extract_btn = gtk::Button::builder()
+            .label("Extract")
+            .css_classes(["flat"])
+            .build();
+        {
+            let sender = sender.clone();
+            day_extract_btn.connect_clicked(move |_| {
+                sender.input(ThemeBuilderMsg::ExtractFromWallpaper);
+            });
+        }
+        day_wp_box.append(&day_extract_btn);
+        day_wp_row.add_suffix(&day_wp_box);
+        accent_group.add(&day_wp_row);
+
+        // --- Night color picker (shown when scheduler is ON) ---
+        let night_accent_row = adw::ActionRow::builder()
+            .title("Night Color")
+            .subtitle("Active during evening/night hours")
+            .build();
+        let night_picker = {
+            let sender = sender.clone();
+            color_picker::build_color_picker(
+                &color_picker::accent_id_to_hex(&initial_night),
+                move |id, _hex| {
+                    sender.input(ThemeBuilderMsg::SetNightAccent(id));
+                },
+            )
+        };
+        night_accent_row.add_suffix(&night_picker);
+        accent_group.add(&night_accent_row);
+
+        let night_wp_row = adw::ActionRow::builder()
+            .title("Night \u{2014} From Wallpaper")
+            .subtitle("Extract night accent from wallpaper")
+            .build();
+        let night_wp_swatches = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(4)
+            .valign(gtk::Align::Center)
+            .build();
+        let night_wp_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .valign(gtk::Align::Center)
+            .build();
+        night_wp_box.append(&night_wp_swatches);
+        let night_extract_btn = gtk::Button::builder()
+            .label("Extract")
+            .css_classes(["flat"])
+            .build();
+        {
+            let sender = sender.clone();
+            night_extract_btn.connect_clicked(move |_| {
+                sender.input(ThemeBuilderMsg::ExtractFromWallpaper);
+            });
+        }
+        night_wp_box.append(&night_extract_btn);
+        night_wp_row.add_suffix(&night_wp_box);
+        accent_group.add(&night_wp_row);
+
+        // Sunrise/sunset toggle
+        let nl_settings = gio::Settings::new("org.gnome.settings-daemon.plugins.color");
+        let is_auto = nl_settings.boolean("night-light-schedule-automatic");
+
+        let sunrise_switch = adw::SwitchRow::builder()
+            .title("Use Sunrise / Sunset")
+            .subtitle("Automatically calculate schedule from your location")
+            .active(is_auto)
+            .build();
+        {
+            let sender = sender.clone();
+            sunrise_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetSunriseSunset(row.is_active()));
+            });
+        }
+        accent_group.add(&sunrise_switch);
+
+        // Schedule info
+        let from_h = nl_settings.double("night-light-schedule-from");
+        let to_h = nl_settings.double("night-light-schedule-to");
+        let schedule_label = if is_auto {
+            format!(
+                "Sunset: ~{}:00 \u{2192} Sunrise: ~{}:00 (location-based)",
+                from_h as u32,
+                to_h as u32,
+            )
+        } else {
+            format!(
+                "Night: {}:00 \u{2192} {}:00 (fixed schedule)",
+                from_h as u32,
+                to_h as u32,
+            )
+        };
+        let sched_info = adw::ActionRow::builder()
+            .title("Schedule")
+            .subtitle(&schedule_label)
+            .build();
+        sched_info.add_prefix(&gtk::Image::from_icon_name("preferences-system-time-symbolic"));
+        accent_group.add(&sched_info);
+
+        // appended in final ordering
 
         // === Radii section ===
         let radii_group = adw::PreferencesGroup::builder()
@@ -243,7 +408,7 @@ impl SimpleComponent for ThemeBuilderModel {
         let window_radius = build_spin_row(
             "Window Corners",
             "Corner radius for application windows",
-            0.0, 48.0, saved.window_radius, 1.0,
+            0.0, 48.0, app_settings.double("tb-window-radius"), 1.0,
         );
         {
             let sender = sender.clone();
@@ -256,7 +421,7 @@ impl SimpleComponent for ThemeBuilderModel {
         let element_radius = build_spin_row(
             "Element Radius",
             "Corner radius for buttons, entries, and cards",
-            0.0, 24.0, saved.element_radius, 1.0,
+            0.0, 24.0, app_settings.double("tb-element-radius"), 1.0,
         );
         {
             let sender = sender.clone();
@@ -266,7 +431,7 @@ impl SimpleComponent for ThemeBuilderModel {
         }
         radii_group.add(&element_radius);
 
-        outer.append(&radii_group);
+        // appended in final ordering
 
         // === Panel section (Shell tinting) ===
         let panel_group = adw::PreferencesGroup::builder()
@@ -277,7 +442,7 @@ impl SimpleComponent for ThemeBuilderModel {
         let panel_radius = build_spin_row(
             "Panel Corner Radius",
             "Roundness of the panel corners",
-            0.0, 24.0, saved.panel_radius, 1.0,
+            0.0, 24.0, app_settings.double("tb-panel-radius"), 1.0,
         );
         {
             let sender = sender.clone();
@@ -290,7 +455,7 @@ impl SimpleComponent for ThemeBuilderModel {
         let panel_opacity = build_spin_row(
             "Panel Opacity",
             "0 = fully transparent, 100 = fully opaque",
-            0.0, 100.0, saved.panel_opacity, 5.0,
+            0.0, 100.0, app_settings.double("tb-panel-opacity"), 5.0,
         );
         {
             let sender = sender.clone();
@@ -315,7 +480,7 @@ impl SimpleComponent for ThemeBuilderModel {
             .build();
         color_btn.set_dialog(&dialog);
         // Set saved panel tint color
-        if let Ok(rgba) = gtk::gdk::RGBA::parse(&saved.panel_tint_hex) {
+        if let Ok(rgba) = gtk::gdk::RGBA::parse(&app_settings.string("tb-panel-tint").to_string()) {
             color_btn.set_rgba(&rgba);
         }
 
@@ -335,7 +500,101 @@ impl SimpleComponent for ThemeBuilderModel {
         tint_row.add_suffix(&color_btn);
         panel_group.add(&tint_row);
 
-        outer.append(&panel_group);
+        // "Use accent color as panel tint" toggle
+        let use_accent_switch = adw::SwitchRow::builder()
+            .title("Use Accent Color as Panel Tint")
+            .subtitle("Automatically derive the panel color from your accent color")
+            .active(false)
+            .build();
+        {
+            let sender = sender.clone();
+            use_accent_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetUseAccentForPanel(row.is_active()));
+            });
+        }
+        panel_group.add(&use_accent_switch);
+
+        // Panel color scheduling (day/night panel tint)
+        let panel_sched_switch = adw::SwitchRow::builder()
+            .title("Schedule Panel Color")
+            .subtitle("Switch panel tint between day and night automatically")
+            .active(app_settings.boolean("scheduled-panel-enabled"))
+            .build();
+        {
+            let sender = sender.clone();
+            panel_sched_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetScheduledPanel(row.is_active()));
+            });
+        }
+        panel_group.add(&panel_sched_switch);
+
+        let day_panel_row = adw::ActionRow::builder()
+            .title("Day Panel Tint")
+            .subtitle("Panel color during daytime")
+            .build();
+        let day_panel_btn = gtk::ColorDialogButton::builder()
+            .valign(gtk::Align::Center)
+            .build();
+        let day_panel_dialog = gtk::ColorDialog::builder()
+            .title("Day Panel Tint")
+            .with_alpha(false)
+            .build();
+        day_panel_btn.set_dialog(&day_panel_dialog);
+        let saved_day_panel = app_settings.string("day-panel-tint").to_string();
+        if !saved_day_panel.is_empty() {
+            if let Ok(rgba) = gtk::gdk::RGBA::parse(&saved_day_panel) {
+                day_panel_btn.set_rgba(&rgba);
+            }
+        }
+        {
+            let sender = sender.clone();
+            day_panel_btn.connect_rgba_notify(move |btn| {
+                let rgba = btn.rgba();
+                let hex = format!(
+                    "#{:02x}{:02x}{:02x}",
+                    (rgba.red() * 255.0) as u8,
+                    (rgba.green() * 255.0) as u8,
+                    (rgba.blue() * 255.0) as u8,
+                );
+                sender.input(ThemeBuilderMsg::SetDayPanelTint(hex));
+            });
+        }
+        day_panel_row.add_suffix(&day_panel_btn);
+        panel_group.add(&day_panel_row);
+
+        let night_panel_row = adw::ActionRow::builder()
+            .title("Night Panel Tint")
+            .subtitle("Panel color during nighttime")
+            .build();
+        let night_panel_btn = gtk::ColorDialogButton::builder()
+            .valign(gtk::Align::Center)
+            .build();
+        let night_panel_dialog = gtk::ColorDialog::builder()
+            .title("Night Panel Tint")
+            .with_alpha(false)
+            .build();
+        night_panel_btn.set_dialog(&night_panel_dialog);
+        let saved_night_panel = app_settings.string("night-panel-tint").to_string();
+        if !saved_night_panel.is_empty() {
+            if let Ok(rgba) = gtk::gdk::RGBA::parse(&saved_night_panel) {
+                night_panel_btn.set_rgba(&rgba);
+            }
+        }
+        {
+            let sender = sender.clone();
+            night_panel_btn.connect_rgba_notify(move |btn| {
+                let rgba = btn.rgba();
+                let hex = format!(
+                    "#{:02x}{:02x}{:02x}",
+                    (rgba.red() * 255.0) as u8,
+                    (rgba.green() * 255.0) as u8,
+                    (rgba.blue() * 255.0) as u8,
+                );
+                sender.input(ThemeBuilderMsg::SetNightPanelTint(hex));
+            });
+        }
+        night_panel_row.add_suffix(&night_panel_btn);
+        panel_group.add(&night_panel_row);
 
         // === Accent Tinting (Tint my GNOME-style) ===
         let tint_group = adw::PreferencesGroup::builder()
@@ -346,7 +605,7 @@ impl SimpleComponent for ThemeBuilderModel {
         let tint_intensity = build_spin_row(
             "Tint Intensity",
             "How much accent color bleeds into surfaces (0\u{2013}20%)",
-            0.0, 20.0, saved.tint_intensity, 1.0,
+            0.0, 20.0, app_settings.double("tb-tint-intensity"), 1.0,
         );
         {
             let sender = sender.clone();
@@ -356,7 +615,26 @@ impl SimpleComponent for ThemeBuilderModel {
         }
         tint_group.add(&tint_intensity);
 
-        outer.append(&tint_group);
+        // === Shared Tinting toggle ===
+        let shared_group = adw::PreferencesGroup::builder()
+            .title("Shared Tinting")
+            .description("Use the accent color tint for the shell panel and dash as well")
+            .build();
+
+        let shared_tinting_switch = adw::SwitchRow::builder()
+            .title("Apply Accent Tint to Shell")
+            .subtitle("When enabled, the panel and dash inherit the accent tint \u{2014} independent shell color pickers are hidden")
+            .active(app_settings.boolean("shared-tinting-enabled"))
+            .build();
+        {
+            let sender = sender.clone();
+            shared_tinting_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetSharedTinting(row.is_active()));
+            });
+        }
+        shared_group.add(&shared_tinting_switch);
+
+        // appended in final ordering
 
         // === Dash / Overview ===
         let dash_group = adw::PreferencesGroup::builder()
@@ -367,7 +645,7 @@ impl SimpleComponent for ThemeBuilderModel {
         let dash_opacity = build_spin_row(
             "Dash Opacity",
             "Transparency of the dash background",
-            0.0, 100.0, saved.dash_opacity, 5.0,
+            0.0, 100.0, app_settings.double("tb-dash-opacity"), 5.0,
         );
         {
             let sender = sender.clone();
@@ -390,7 +668,7 @@ impl SimpleComponent for ThemeBuilderModel {
         }
         dash_group.add(&blur_switch);
 
-        outer.append(&dash_group);
+        // appended in final ordering
 
         // === Color Scheme ===
         let scheme_group = adw::PreferencesGroup::builder()
@@ -424,7 +702,7 @@ impl SimpleComponent for ThemeBuilderModel {
             });
         }
         scheme_group.add(&scheme_row);
-        outer.append(&scheme_group);
+        // appended in final ordering
 
         // === Typography ===
         let font_group = adw::PreferencesGroup::builder()
@@ -526,7 +804,7 @@ impl SimpleComponent for ThemeBuilderModel {
             });
         }
         font_group.add(&hinting_row);
-        outer.append(&font_group);
+        // appended in final ordering
 
         // === Cursor ===
         let cursor_group = adw::PreferencesGroup::builder()
@@ -547,7 +825,7 @@ impl SimpleComponent for ThemeBuilderModel {
             });
         }
         cursor_group.add(&cursor_size_row);
-        outer.append(&cursor_group);
+        // appended in final ordering
 
         // === Desktop Behavior ===
         let behavior_group = adw::PreferencesGroup::builder()
@@ -580,7 +858,7 @@ impl SimpleComponent for ThemeBuilderModel {
             });
         }
         behavior_group.add(&hot_corners_switch);
-        outer.append(&behavior_group);
+        // appended in final ordering
 
         // === Window Manager ===
         let wm_group = adw::PreferencesGroup::builder()
@@ -693,7 +971,7 @@ impl SimpleComponent for ThemeBuilderModel {
         tb_font_row.add_suffix(&tb_font_btn);
         wm_group.add(&tb_font_row);
 
-        outer.append(&wm_group);
+        // appended in final ordering
 
         // === Night Light ===
         let nl_group = adw::PreferencesGroup::builder()
@@ -743,7 +1021,7 @@ impl SimpleComponent for ThemeBuilderModel {
         }
         nl_group.add(&nl_auto);
 
-        outer.append(&nl_group);
+        // appended in final ordering
 
         // === Sound ===
         let sound_group = adw::PreferencesGroup::builder()
@@ -779,15 +1057,265 @@ impl SimpleComponent for ThemeBuilderModel {
         }
         sound_group.add(&event_sounds_switch);
 
-        outer.append(&sound_group);
+        // appended in final ordering
 
-        // === Action buttons ===
-        let action_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .halign(gtk::Align::End)
-            .spacing(12)
-            .margin_top(12)
+        // === Notifications ===
+        let notif_group = adw::PreferencesGroup::builder()
+            .title("Notifications & Calendar")
+            .description("Shell notification banner and calendar styling")
             .build();
+
+        let notif_radius = build_spin_row(
+            "Notification Radius",
+            "Corner radius of notification banners",
+            0.0, 24.0, 12.0, 1.0,
+        );
+        {
+            let sender = sender.clone();
+            notif_radius.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetNotificationRadius(row.value()));
+            });
+        }
+        notif_group.add(&notif_radius);
+
+        let notif_opacity = build_spin_row(
+            "Notification Opacity",
+            "Background opacity of notification banners (0\u{2013}100%)",
+            0.0, 100.0, 95.0, 5.0,
+        );
+        {
+            let sender = sender.clone();
+            notif_opacity.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetNotificationOpacity(row.value() / 100.0));
+            });
+        }
+        notif_group.add(&notif_opacity);
+
+        // appended in final ordering
+
+        // === Headerbar & CSD ===
+        let csd_group = adw::PreferencesGroup::builder()
+            .title("Headerbar & CSD")
+            .description("Client-side decoration and titlebar styling")
+            .build();
+
+        let hb_height = build_spin_row(
+            "Headerbar Height",
+            "Minimum height of the titlebar (default 47, compact ~30)",
+            24.0, 60.0, 47.0, 1.0,
+        );
+        {
+            let sender = sender.clone();
+            hb_height.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetHeaderbarHeight(row.value()));
+            });
+        }
+        csd_group.add(&hb_height);
+
+        let circular_btn_switch = adw::SwitchRow::builder()
+            .title("Circular Window Controls")
+            .subtitle("Make close/minimize/maximize buttons round like macOS")
+            .active(app_settings.boolean("tb-circular-buttons"))
+            .build();
+        {
+            let sender = sender.clone();
+            circular_btn_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetCircularButtons(row.is_active()));
+            });
+        }
+        csd_group.add(&circular_btn_switch);
+
+        let shadow_switch = adw::SwitchRow::builder()
+            .title("Window Drop Shadow")
+            .subtitle("Show the soft shadow around CSD windows")
+            .active(app_settings.boolean("tb-show-window-shadow"))
+            .build();
+        {
+            let sender = sender.clone();
+            shadow_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetShowWindowShadow(row.is_active()));
+            });
+        }
+        csd_group.add(&shadow_switch);
+
+        let inset_border_row = build_spin_row(
+            "Window Inset Border",
+            "Visible border inside the window frame (0 = none)",
+            0.0, 4.0, 0.0, 1.0,
+        );
+        {
+            let sender = sender.clone();
+            inset_border_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetInsetBorder(row.value()));
+            });
+        }
+        csd_group.add(&inset_border_row);
+
+        // appended in final ordering
+
+        // === Visual Insets & Borders ===
+        let inset_group = adw::PreferencesGroup::builder()
+            .title("Visual Insets & Borders")
+            .description("Fine-tune borders, shadows, and focus indicators")
+            .build();
+
+        let card_border = build_spin_row(
+            "Card Border Width",
+            "Visible border around cards and list rows (0 = none)",
+            0.0, 4.0, 1.0, 0.5,
+        );
+        {
+            let sender = sender.clone();
+            card_border.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetCardBorderWidth(row.value()));
+            });
+        }
+        inset_group.add(&card_border);
+
+        let hbar_shadow = build_spin_row(
+            "Headerbar Shadow",
+            "Drop shadow intensity below the headerbar (0 = flat)",
+            0.0, 1.0, 1.0, 0.1,
+        );
+        {
+            let sender = sender.clone();
+            hbar_shadow.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetHeaderbarShadow(row.value()));
+            });
+        }
+        inset_group.add(&hbar_shadow);
+
+        let separator_opacity = build_spin_row(
+            "Separator Opacity",
+            "Visibility of divider lines between list rows (0\u{2013}100%)",
+            0.0, 100.0, 100.0, 10.0,
+        );
+        {
+            let sender = sender.clone();
+            separator_opacity.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetSeparatorOpacity(row.value()));
+            });
+        }
+        inset_group.add(&separator_opacity);
+
+        let focus_ring = build_spin_row(
+            "Focus Ring Width",
+            "Keyboard focus outline thickness",
+            0.0, 4.0, 2.0, 0.5,
+        );
+        {
+            let sender = sender.clone();
+            focus_ring.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetFocusRingWidth(row.value()));
+            });
+        }
+        inset_group.add(&focus_ring);
+
+        let combo_inset_switch = adw::SwitchRow::builder()
+            .title("Combo Button Inset")
+            .subtitle("Show a visible inset/border on dropdown combo buttons")
+            .active(true)
+            .build();
+        {
+            let sender = sender.clone();
+            combo_inset_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetComboInset(row.is_active()));
+            });
+        }
+        inset_group.add(&combo_inset_switch);
+
+        // appended in final ordering
+
+        // === Window Behavior (Mutter) ===
+        let window_group = adw::PreferencesGroup::builder()
+            .title("Window Behavior")
+            .description("Window management and client-side decorations")
+            .build();
+
+        let mutter = gio::Settings::new("org.gnome.mutter");
+
+        let edge_tiling_switch = adw::SwitchRow::builder()
+            .title("Edge Tiling")
+            .subtitle("Tile windows by dragging them to screen edges")
+            .active(mutter.boolean("edge-tiling"))
+            .build();
+        {
+            let sender = sender.clone();
+            edge_tiling_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetEdgeTiling(row.is_active()));
+            });
+        }
+        window_group.add(&edge_tiling_switch);
+
+        let center_switch = adw::SwitchRow::builder()
+            .title("Center New Windows")
+            .subtitle("Open new windows in the center of the screen")
+            .active(mutter.boolean("center-new-windows"))
+            .build();
+        {
+            let sender = sender.clone();
+            center_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetCenterNewWindows(row.is_active()));
+            });
+        }
+        window_group.add(&center_switch);
+
+        let attach_switch = adw::SwitchRow::builder()
+            .title("Attach Modal Dialogs")
+            .subtitle("Attach dialog windows to their parent window")
+            .active(mutter.boolean("attach-modal-dialogs"))
+            .build();
+        {
+            let sender = sender.clone();
+            attach_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetAttachModals(row.is_active()));
+            });
+        }
+        window_group.add(&attach_switch);
+
+        let auto_max_switch = adw::SwitchRow::builder()
+            .title("Auto Maximize")
+            .subtitle("Automatically maximize windows that are nearly full-screen")
+            .active(mutter.boolean("auto-maximize"))
+            .build();
+        {
+            let sender = sender.clone();
+            auto_max_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetAutoMaximize(row.is_active()));
+            });
+        }
+        window_group.add(&auto_max_switch);
+
+        let dynamic_ws_switch = adw::SwitchRow::builder()
+            .title("Dynamic Workspaces")
+            .subtitle("Automatically add and remove workspaces as needed")
+            .active(mutter.boolean("dynamic-workspaces"))
+            .build();
+        {
+            let sender = sender.clone();
+            dynamic_ws_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetDynamicWorkspaces(row.is_active()));
+            });
+        }
+        window_group.add(&dynamic_ws_switch);
+
+        let current_border = mutter.int("draggable-border-width") as f64;
+        let border_width = build_spin_row(
+            "Draggable Border Width",
+            "Invisible resize handle width at window edges (px)",
+            1.0, 48.0, current_border, 1.0,
+        );
+        {
+            let sender = sender.clone();
+            border_width.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetDraggableBorderWidth(row.value() as i32));
+            });
+        }
+        window_group.add(&border_width);
+
+        // appended in final ordering
+
+        // === Action buttons (will be placed in bottom bar) ===
 
         let reset_btn = gtk::Button::builder()
             .label("Reset to Defaults")
@@ -799,7 +1327,7 @@ impl SimpleComponent for ThemeBuilderModel {
                 sender.input(ThemeBuilderMsg::Reset);
             });
         }
-        action_box.append(&reset_btn);
+        // reset_btn placed in bottom_bar below
 
         let apply_btn = gtk::Button::builder()
             .label("Apply Theme")
@@ -811,26 +1339,196 @@ impl SimpleComponent for ThemeBuilderModel {
                 sender.input(ThemeBuilderMsg::Apply);
             });
         }
-        action_box.append(&apply_btn);
+        // apply_btn placed in bottom_bar below
 
-        outer.append(&action_box);
+        // === Category-based layout with sidebar ===
+        // Build per-category content pages
+        fn build_category_page(groups: &[&impl IsA<gtk::Widget>]) -> gtk::ScrolledWindow {
+            let scroll = gtk::ScrolledWindow::builder().vexpand(true).build();
+            let clamp = adw::Clamp::builder()
+                .maximum_size(600)
+                .margin_top(24)
+                .margin_bottom(24)
+                .margin_start(24)
+                .margin_end(24)
+                .build();
+            let page_box = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(24)
+                .build();
+            for group in groups {
+                page_box.append(*group);
+            }
+            clamp.set_child(Some(&page_box));
+            scroll.set_child(Some(&clamp));
+            scroll
+        }
 
-        clamp.set_child(Some(&outer));
-        scroll.set_child(Some(&clamp));
-        root.append(&scroll);
+        let color_page = build_category_page(
+            &[&accent_group, &tint_group, &shared_group, &panel_group, &dash_group, &notif_group, &scheme_group],
+        );
+        let windows_page = build_category_page(
+            &[&radii_group, &csd_group, &inset_group, &window_group, &wm_group],
+        );
+        let typography_page = build_category_page(
+            &[&font_group, &cursor_group],
+        );
+        let behavior_page = build_category_page(
+            &[&behavior_group, &nl_group],
+        );
+        let sound_page = build_category_page(
+            &[&sound_group],
+        );
+
+        // Stack for category content
+        let category_stack = gtk::Stack::new();
+        category_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        category_stack.add_named(&color_page, Some("color"));
+        category_stack.add_named(&windows_page, Some("windows"));
+        category_stack.add_named(&typography_page, Some("typography"));
+        category_stack.add_named(&behavior_page, Some("behavior"));
+        category_stack.add_named(&sound_page, Some("sound"));
+
+        // Sidebar
+        let sidebar_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::Single)
+            .css_classes(["navigation-sidebar"])
+            .build();
+
+        let categories = [
+            ("color", "Color", "applications-graphics-symbolic"),
+            ("windows", "Windows", "preferences-desktop-display-symbolic"),
+            ("typography", "Typography", "font-x-generic-symbolic"),
+            ("behavior", "Behavior", "preferences-other-symbolic"),
+            ("sound", "Sound", "audio-speakers-symbolic"),
+        ];
+
+        for (id, label, icon) in &categories {
+            let row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(12)
+                .margin_top(8)
+                .margin_bottom(8)
+                .margin_start(12)
+                .margin_end(12)
+                .build();
+            row.append(&gtk::Image::from_icon_name(icon));
+            row.append(&gtk::Label::new(Some(label)));
+
+            let list_row = gtk::ListBoxRow::builder()
+                .child(&row)
+                .name(*id)
+                .build();
+            sidebar_list.append(&list_row);
+        }
+
+        // Select first row
+        if let Some(first) = sidebar_list.row_at_index(0) {
+            sidebar_list.select_row(Some(&first));
+        }
+
+        {
+            let stack = category_stack.clone();
+            sidebar_list.connect_row_selected(move |_, row| {
+                if let Some(row) = row {
+                    let name = row.widget_name();
+                    if !name.is_empty() {
+                        stack.set_visible_child_name(&name);
+                    }
+                }
+            });
+        }
+
+        // Compose the split layout
+        let sidebar_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .width_request(180)
+            .build();
+        sidebar_box.append(&version_banner);
+        sidebar_box.append(&sidebar_list);
+
+        category_stack.set_hexpand(true);
+
+        let split = gtk::Paned::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .vexpand(true)
+            .start_child(&sidebar_box)
+            .end_child(&category_stack)
+            .position(180)
+            .shrink_start_child(false)
+            .shrink_end_child(false)
+            .build();
+
+        root.append(&split);
+
+        // Persistent bottom action bar — visible across all categories
+        let bottom_bar = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .halign(gtk::Align::End)
+            .spacing(12)
+            .margin_top(8)
+            .margin_bottom(8)
+            .margin_start(24)
+            .margin_end(24)
+            .css_classes(["toolbar"])
+            .build();
+        bottom_bar.append(&reset_btn);
+        bottom_bar.append(&apply_btn);
+        root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        root.append(&bottom_bar);
 
         let model = ThemeBuilderModel {
             apply_uc: services.apply_theme,
             detected_version: services.detected_gnome_version,
-            wallpaper_swatches: wallpaper_swatches.clone(),
-            window_radius: saved.window_radius,
-            element_radius: saved.element_radius,
-            panel_radius: saved.panel_radius,
-            panel_opacity: saved.panel_opacity,
-            panel_tint_hex: saved.panel_tint_hex,
-            tint_intensity: saved.tint_intensity,
-            dash_opacity: saved.dash_opacity,
-            overview_blur: true,
+            wallpaper_swatches: vec![
+                wallpaper_swatches.clone(),
+                day_wp_swatches.clone(),
+                night_wp_swatches.clone(),
+            ],
+            color_pickers: vec![
+                single_picker.clone(),
+                day_picker.clone(),
+                night_picker.clone(),
+            ],
+            window_radius: app_settings.double("tb-window-radius"),
+            element_radius: app_settings.double("tb-element-radius"),
+            panel_radius: app_settings.double("tb-panel-radius"),
+            panel_opacity: app_settings.double("tb-panel-opacity"),
+            panel_tint_hex: app_settings.string("tb-panel-tint").to_string(),
+            tint_intensity: app_settings.double("tb-tint-intensity"),
+            dash_opacity: app_settings.double("tb-dash-opacity"),
+            overview_blur: app_settings.boolean("tb-overview-blur"),
+            headerbar_height: app_settings.double("tb-headerbar-height"),
+            headerbar_shadow: app_settings.double("tb-headerbar-shadow"),
+            circular_buttons: app_settings.boolean("tb-circular-buttons"),
+            show_window_shadow: app_settings.boolean("tb-show-window-shadow"),
+            inset_border: app_settings.double("tb-inset-border"),
+            card_border_width: app_settings.double("tb-card-border-width"),
+            separator_opacity: app_settings.double("tb-separator-opacity"),
+            focus_ring_width: app_settings.double("tb-focus-ring-width"),
+            combo_inset: app_settings.boolean("tb-combo-inset"),
+            notification_radius: app_settings.double("tb-notification-radius"),
+            notification_opacity: app_settings.double("tb-notification-opacity"),
+            scheduled_accent_enabled: saved_sched_enabled,
+            day_accent: initial_day,
+            night_accent: initial_night,
+            single_color_row: single_color_row.clone(),
+            single_wallpaper_row: single_wallpaper_row.clone(),
+            day_accent_row: day_accent_row.clone(),
+            day_wp_row: day_wp_row.clone(),
+            night_accent_row: night_accent_row.clone(),
+            night_wp_row: night_wp_row.clone(),
+            sched_info_row: sched_info.clone(),
+            shared_tinting: app_settings.boolean("shared-tinting-enabled"),
+            use_accent_for_panel: app_settings.boolean("shared-tinting-enabled"),
+            scheduled_panel_enabled: app_settings.boolean("scheduled-panel-enabled"),
+            day_panel_tint: if saved_day_panel.is_empty() { "#1a1a1e".into() } else { saved_day_panel },
+            night_panel_tint: if saved_night_panel.is_empty() { "#1a1a1e".into() } else { saved_night_panel },
+            panel_tint_row: tint_row.clone(),
+            panel_use_accent_row: use_accent_switch.clone(),
+            panel_sched_row: panel_sched_switch.clone(),
+            day_panel_row: day_panel_row.clone(),
+            night_panel_row: night_panel_row.clone(),
             compat_rows: HashMap::from([
                 (ThemeControlId::WindowRadius, (window_radius, "Corner radius for application windows".into())),
                 (ThemeControlId::ElementRadius, (element_radius, "Corner radius for buttons, entries, and cards".into())),
@@ -841,8 +1539,21 @@ impl SimpleComponent for ThemeBuilderModel {
         };
         let widgets = view_output!();
 
-        // Initial compatibility check
+        // Initial state
+        sender.input(ThemeBuilderMsg::RefreshVisibility);
         sender.input(ThemeBuilderMsg::RefreshCompat);
+
+        // Apply scheduled accent immediately on startup
+        sender.input(ThemeBuilderMsg::TickAccentSchedule);
+
+        // Check accent schedule every 60 seconds
+        {
+            let sender = sender.clone();
+            glib::timeout_add_seconds_local(60, move || {
+                sender.input(ThemeBuilderMsg::TickAccentSchedule);
+                glib::ControlFlow::Continue
+            });
+        }
 
         ComponentParts { model, widgets }
     }
@@ -876,25 +1587,19 @@ impl SimpleComponent for ThemeBuilderModel {
                 });
             }
             ThemeBuilderMsg::WallpaperColorsReady(colors) => {
-                // Clear previous swatches
-                while let Some(child) = self.wallpaper_swatches.first_child() {
-                    self.wallpaper_swatches.remove(&child);
+                // Clear all swatch containers
+                for container in &self.wallpaper_swatches {
+                    while let Some(child) = container.first_child() {
+                        container.remove(&child);
+                    }
                 }
 
-                // Create clickable color swatches
-                for (hex, accent_id) in &colors {
-                    let btn = gtk::Button::builder()
-                        .width_request(28)
-                        .height_request(28)
-                        .tooltip_text(&format!("{hex} \u{2192} {accent_id}"))
-                        .build();
-
+                // Register CSS for each color once
+                for (hex, _) in &colors {
                     let css_class = format!(
                         "wallpaper-swatch-{}",
                         hex.trim_start_matches('#')
                     );
-                    btn.add_css_class(&css_class);
-
                     let css_provider = gtk::CssProvider::new();
                     css_provider.load_from_string(&format!(
                         ".{css_class} {{ \
@@ -903,7 +1608,10 @@ impl SimpleComponent for ThemeBuilderModel {
                             min-width: 24px; \
                             min-height: 24px; \
                             padding: 0; \
-                            border: 2px solid rgba(255,255,255,0.3); \
+                            border: 2px solid transparent; \
+                        }} \
+                        .{css_class}:checked {{ \
+                            border-color: @theme_fg_color; \
                         }}"
                     ));
                     gtk::style_context_add_provider_for_display(
@@ -911,14 +1619,44 @@ impl SimpleComponent for ThemeBuilderModel {
                         &css_provider,
                         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
                     );
+                }
 
-                    let sender = sender.clone();
-                    let aid = accent_id.clone();
-                    btn.connect_clicked(move |_| {
-                        sender.input(ThemeBuilderMsg::SetAccentColor(aid.clone()));
-                    });
+                // Populate each swatch container with toggle buttons for visual feedback
+                let pickers = self.color_pickers.clone();
+                for container in &self.wallpaper_swatches {
+                    for (i, (hex, accent_id)) in colors.iter().enumerate() {
+                        let btn = gtk::ToggleButton::builder()
+                            .width_request(28)
+                            .height_request(28)
+                            .tooltip_text(&format!("{hex} \u{2192} {accent_id}"))
+                            .build();
+                        btn.add_css_class(&format!(
+                            "wallpaper-swatch-{}",
+                            hex.trim_start_matches('#')
+                        ));
 
-                    self.wallpaper_swatches.append(&btn);
+                        // Link wallpaper swatches in a radio group within each container
+                        if i > 0 {
+                            if let Some(first) = container.first_child() {
+                                btn.set_group(first.downcast_ref::<gtk::ToggleButton>());
+                            }
+                        }
+
+                        let sender = sender.clone();
+                        let aid = accent_id.clone();
+                        let pickers = pickers.clone();
+                        btn.connect_toggled(move |b| {
+                            if b.is_active() {
+                                // Deselect all color picker toggles
+                                for picker in &pickers {
+                                    color_picker::deselect_all(picker);
+                                }
+                                sender.input(ThemeBuilderMsg::SetAccentColor(aid.clone()));
+                            }
+                        });
+
+                        container.append(&btn);
+                    }
                 }
 
                 if colors.is_empty() {
@@ -951,6 +1689,201 @@ impl SimpleComponent for ThemeBuilderModel {
             }
             ThemeBuilderMsg::SetDashOpacity(v) => self.dash_opacity = v,
             ThemeBuilderMsg::SetOverviewBlur(v) => self.overview_blur = v,
+            ThemeBuilderMsg::SetSharedTinting(enabled) => {
+                self.shared_tinting = enabled;
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_boolean("shared-tinting-enabled", enabled);
+                if enabled {
+                    let accent_hex = current_accent_hex();
+                    self.panel_tint_hex = accent_hex;
+                }
+                sender.input(ThemeBuilderMsg::RefreshVisibility);
+            }
+            ThemeBuilderMsg::RefreshVisibility => {
+                // Accent color: single vs day/night based on scheduler
+                let sched_on = self.scheduled_accent_enabled;
+                self.single_color_row.set_visible(!sched_on);
+                self.single_wallpaper_row.set_visible(!sched_on);
+                self.day_accent_row.set_visible(sched_on);
+                self.day_wp_row.set_visible(sched_on);
+                self.night_accent_row.set_visible(sched_on);
+                self.night_wp_row.set_visible(sched_on);
+                self.sched_info_row.set_visible(sched_on);
+
+                // When shared tinting is on, hide independent panel color controls
+                let hide_panel_colors = self.shared_tinting;
+                self.panel_tint_row.set_visible(!hide_panel_colors);
+                self.panel_use_accent_row.set_visible(!hide_panel_colors);
+                self.panel_sched_row.set_visible(!hide_panel_colors);
+                self.day_panel_row.set_visible(!hide_panel_colors && self.scheduled_panel_enabled);
+                self.night_panel_row.set_visible(!hide_panel_colors && self.scheduled_panel_enabled);
+            }
+            ThemeBuilderMsg::SetUseAccentForPanel(enabled) => {
+                self.use_accent_for_panel = enabled;
+                if enabled {
+                    // Derive panel tint from current accent color
+                    let accent_hex = current_accent_hex();
+                    self.panel_tint_hex = accent_hex.clone();
+                    sender.input(ThemeBuilderMsg::SetPanelTint(accent_hex));
+                }
+            }
+            ThemeBuilderMsg::SetScheduledPanel(enabled) => {
+                self.scheduled_panel_enabled = enabled;
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_boolean("scheduled-panel-enabled", enabled);
+                sender.input(ThemeBuilderMsg::RefreshVisibility);
+                if enabled {
+                    sender.input(ThemeBuilderMsg::TickAccentSchedule);
+                }
+            }
+            ThemeBuilderMsg::SetDayPanelTint(hex) => {
+                self.day_panel_tint = hex.clone();
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_string("day-panel-tint", &hex);
+                if self.scheduled_panel_enabled {
+                    sender.input(ThemeBuilderMsg::TickAccentSchedule);
+                }
+            }
+            ThemeBuilderMsg::SetNightPanelTint(hex) => {
+                self.night_panel_tint = hex.clone();
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_string("night-panel-tint", &hex);
+                if self.scheduled_panel_enabled {
+                    sender.input(ThemeBuilderMsg::TickAccentSchedule);
+                }
+            }
+            ThemeBuilderMsg::SetScheduledAccent(enabled) => {
+                self.scheduled_accent_enabled = enabled;
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_boolean("scheduled-accent-enabled", enabled);
+                sender.input(ThemeBuilderMsg::RefreshVisibility);
+                if enabled {
+                    sender.input(ThemeBuilderMsg::TickAccentSchedule);
+                }
+                tracing::info!("scheduled accent: {enabled}");
+            }
+            ThemeBuilderMsg::SetDayAccent(id) => {
+                self.day_accent = id.clone();
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_string("day-accent-color", &id);
+                if self.scheduled_accent_enabled {
+                    sender.input(ThemeBuilderMsg::TickAccentSchedule);
+                }
+            }
+            ThemeBuilderMsg::SetNightAccent(id) => {
+                self.night_accent = id.clone();
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_string("night-accent-color", &id);
+                if self.scheduled_accent_enabled {
+                    sender.input(ThemeBuilderMsg::TickAccentSchedule);
+                }
+            }
+            ThemeBuilderMsg::SetSunriseSunset(enabled) => {
+                // This sets the Night Light schedule mode, which our tick handler
+                // reads from. When automatic, gnome-settings-daemon computes
+                // sunrise/sunset from the device's geolocation.
+                let nl = gio::Settings::new("org.gnome.settings-daemon.plugins.color");
+                let _ = nl.set_boolean("night-light-schedule-automatic", enabled);
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_boolean("use-sunrise-sunset", enabled);
+                tracing::info!("sunrise/sunset scheduling: {enabled}");
+            }
+            ThemeBuilderMsg::TickAccentSchedule => {
+                let nl = gio::Settings::new("org.gnome.settings-daemon.plugins.color");
+                let from_h = nl.double("night-light-schedule-from");
+                let to_h = nl.double("night-light-schedule-to");
+
+                let now = {
+                    let dt = glib::DateTime::now_local().unwrap();
+                    dt.hour() as f64 + dt.minute() as f64 / 60.0
+                };
+
+                let is_night = if from_h > to_h {
+                    now >= from_h || now < to_h
+                } else {
+                    now >= from_h && now < to_h
+                };
+
+                // Accent color scheduling
+                if self.scheduled_accent_enabled {
+                    let target = if is_night {
+                        &self.night_accent
+                    } else {
+                        &self.day_accent
+                    };
+                    let iface = gio::Settings::new("org.gnome.desktop.interface");
+                    let current = iface.string("accent-color").to_string();
+                    if current != *target {
+                        let _ = iface.set_string("accent-color", target);
+                        tracing::info!(
+                            "scheduled accent: {current} \u{2192} {target} ({})",
+                            if is_night { "night" } else { "day" }
+                        );
+                    }
+
+                    // If "use accent for panel" is on, also update panel tint
+                    if self.use_accent_for_panel {
+                        let accent_hex = current_accent_hex();
+                        self.panel_tint_hex = accent_hex;
+                    }
+                }
+
+                // Panel tint scheduling
+                if self.scheduled_panel_enabled {
+                    let target_tint = if is_night {
+                        &self.night_panel_tint
+                    } else {
+                        &self.day_panel_tint
+                    };
+                    if self.panel_tint_hex != *target_tint {
+                        self.panel_tint_hex = target_tint.clone();
+                        tracing::info!(
+                            "scheduled panel tint: \u{2192} {target_tint} ({})",
+                            if is_night { "night" } else { "day" }
+                        );
+                    }
+                }
+            }
+            // --- Headerbar / CSD ---
+            ThemeBuilderMsg::SetHeaderbarHeight(v) => self.headerbar_height = v,
+            ThemeBuilderMsg::SetHeaderbarShadow(v) => self.headerbar_shadow = v,
+            ThemeBuilderMsg::SetCircularButtons(v) => self.circular_buttons = v,
+            ThemeBuilderMsg::SetShowWindowShadow(v) => self.show_window_shadow = v,
+            ThemeBuilderMsg::SetInsetBorder(v) => self.inset_border = v,
+            // --- Visual Insets ---
+            ThemeBuilderMsg::SetCardBorderWidth(v) => self.card_border_width = v,
+            ThemeBuilderMsg::SetSeparatorOpacity(v) => self.separator_opacity = v,
+            ThemeBuilderMsg::SetFocusRingWidth(v) => self.focus_ring_width = v,
+            ThemeBuilderMsg::SetComboInset(v) => self.combo_inset = v,
+            // --- Notifications ---
+            ThemeBuilderMsg::SetNotificationRadius(v) => self.notification_radius = v,
+            ThemeBuilderMsg::SetNotificationOpacity(v) => self.notification_opacity = v,
+
+            // --- Window Behavior (Mutter GSettings, live) ---
+            ThemeBuilderMsg::SetEdgeTiling(enabled) => {
+                let m = gio::Settings::new("org.gnome.mutter");
+                let _ = m.set_boolean("edge-tiling", enabled);
+            }
+            ThemeBuilderMsg::SetCenterNewWindows(enabled) => {
+                let m = gio::Settings::new("org.gnome.mutter");
+                let _ = m.set_boolean("center-new-windows", enabled);
+            }
+            ThemeBuilderMsg::SetAttachModals(enabled) => {
+                let m = gio::Settings::new("org.gnome.mutter");
+                let _ = m.set_boolean("attach-modal-dialogs", enabled);
+            }
+            ThemeBuilderMsg::SetAutoMaximize(enabled) => {
+                let m = gio::Settings::new("org.gnome.mutter");
+                let _ = m.set_boolean("auto-maximize", enabled);
+            }
+            ThemeBuilderMsg::SetDynamicWorkspaces(enabled) => {
+                let m = gio::Settings::new("org.gnome.mutter");
+                let _ = m.set_boolean("dynamic-workspaces", enabled);
+            }
+            ThemeBuilderMsg::SetDraggableBorderWidth(width) => {
+                let m = gio::Settings::new("org.gnome.mutter");
+                let _ = m.set_int("draggable-border-width", width);
+            }
             ThemeBuilderMsg::SetButtonLayout(layout) => {
                 let wm = gio::Settings::new("org.gnome.desktop.wm.preferences");
                 let _ = wm.set_string("button-layout", &layout);
@@ -1060,6 +1993,29 @@ impl SimpleComponent for ThemeBuilderModel {
                 }
             }
             ThemeBuilderMsg::Apply => {
+                // Persist all theme builder values to GSettings
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_double("tb-window-radius", self.window_radius);
+                let _ = app.set_double("tb-element-radius", self.element_radius);
+                let _ = app.set_double("tb-panel-radius", self.panel_radius);
+                let _ = app.set_double("tb-panel-opacity", self.panel_opacity);
+                let _ = app.set_string("tb-panel-tint", &self.panel_tint_hex);
+                let _ = app.set_double("tb-tint-intensity", self.tint_intensity);
+                let _ = app.set_double("tb-dash-opacity", self.dash_opacity);
+                let _ = app.set_boolean("tb-overview-blur", self.overview_blur);
+                let _ = app.set_double("tb-headerbar-height", self.headerbar_height);
+                let _ = app.set_double("tb-headerbar-shadow", self.headerbar_shadow);
+                let _ = app.set_boolean("tb-circular-buttons", self.circular_buttons);
+                let _ = app.set_boolean("tb-show-window-shadow", self.show_window_shadow);
+                let _ = app.set_double("tb-inset-border", self.inset_border);
+                let _ = app.set_double("tb-card-border-width", self.card_border_width);
+                let _ = app.set_double("tb-separator-opacity", self.separator_opacity);
+                let _ = app.set_double("tb-focus-ring-width", self.focus_ring_width);
+                let _ = app.set_boolean("tb-combo-inset", self.combo_inset);
+                let _ = app.set_double("tb-notification-radius", self.notification_radius);
+                let _ = app.set_double("tb-notification-opacity", self.notification_opacity);
+
+                // Generate and write CSS
                 match self.build_spec() {
                     Ok(spec) => match self.apply_uc.apply(&spec) {
                         Ok(()) => {
@@ -1100,6 +2056,7 @@ impl SimpleComponent for ThemeBuilderModel {
 impl ThemeBuilderModel {
     /// Build a validated ThemeSpec from the current slider values.
     fn build_spec(&self) -> Result<ThemeSpec, gnomex_domain::DomainError> {
+        use gnomex_domain::{HeaderbarSpec, WindowFrameSpec, InsetSpec};
         let accent_hex = current_accent_hex();
         Ok(ThemeSpec {
             window_radius: Radius::new(self.window_radius)?,
@@ -1115,6 +2072,27 @@ impl ThemeBuilderModel {
             tint: TintSpec {
                 accent_hex: HexColor::new(&accent_hex)?,
                 intensity: Opacity::from_percent(self.tint_intensity)?,
+            },
+            headerbar: HeaderbarSpec {
+                min_height: Radius::new(self.headerbar_height)?,
+                shadow_intensity: Opacity::from_fraction(self.headerbar_shadow)?,
+                circular_buttons: self.circular_buttons,
+            },
+            window_frame: WindowFrameSpec {
+                show_shadow: self.show_window_shadow,
+                inset_border: Radius::new(self.inset_border)?,
+            },
+            insets: InsetSpec {
+                card_border_width: Opacity::from_fraction(self.card_border_width)?,
+                separator_opacity: Opacity::from_fraction(self.separator_opacity)?,
+                focus_ring_width: Opacity::from_fraction(self.focus_ring_width)?,
+                combo_inset: self.combo_inset,
+            },
+            foreground: gnomex_domain::ForegroundSpec::default(),
+            status_colors: gnomex_domain::StatusColorSpec::default(),
+            notifications: gnomex_domain::NotificationSpec {
+                radius: Radius::new(self.notification_radius)?,
+                opacity: Opacity::from_fraction(self.notification_opacity)?,
             },
             overview_blur: self.overview_blur,
         })
@@ -1148,152 +2126,12 @@ fn build_spin_row(
         .build()
 }
 
-/// Saved theme values, parsed from existing CSS files.
-#[derive(Debug)]
-struct SavedValues {
-    window_radius: f64,
-    element_radius: f64,
-    panel_radius: f64,
-    panel_opacity: f64,
-    panel_tint_hex: String,
-    tint_intensity: f64,
-    dash_opacity: f64,
-}
-
-impl Default for SavedValues {
-    fn default() -> Self {
-        Self {
-            window_radius: 12.0,
-            element_radius: 6.0,
-            panel_radius: 0.0,
-            panel_opacity: 80.0,
-            panel_tint_hex: "#1a1a1e".into(),
-            tint_intensity: 5.0,
-            dash_opacity: 70.0,
-        }
-    }
-}
-
-/// Parse saved values from existing CSS files on disk.
-fn load_saved_values() -> SavedValues {
-    let mut vals = SavedValues::default();
-    let Some(home) = dirs::home_dir() else {
-        return vals;
-    };
-
-    // Parse GTK CSS
-    if let Ok(gtk_css) = std::fs::read_to_string(home.join(".config/gtk-4.0/gtk.css")) {
-        if let Some(v) = extract_px(&gtk_css, "window.background { border-radius:") {
-            vals.window_radius = v;
-        }
-        if let Some(v) = extract_px(&gtk_css, "button { border-radius:") {
-            vals.element_radius = v;
-        }
-        // Tint intensity: parse from the mix() percentage in dark mode
-        // Looking for: mix(#222226, @accent_bg_color, 0.05)
-        if let Some(v) = extract_mix_pct(&gtk_css) {
-            vals.tint_intensity = (v * 100.0).round();
-        }
-    }
-
-    // Parse Shell CSS
-    let shell_path = home
-        .join(".local/share/themes/GNOME-X-Custom/gnome-shell")
-        .join("gnome-shell.css");
-    if let Ok(shell_css) = std::fs::read_to_string(shell_path) {
-        // Panel opacity: alpha(#xxx, 0.8) → 80
-        if let Some(v) = extract_alpha_opacity(&shell_css, "#panel") {
-            vals.panel_opacity = (v * 100.0).round();
-        }
-        // Panel radius: border-radius: 0 0 Xpx Xpx
-        if let Some(v) = extract_panel_radius(&shell_css) {
-            vals.panel_radius = v;
-        }
-        // Panel tint: alpha(#xxxxxx, ...)
-        if let Some(hex) = extract_alpha_color(&shell_css, "#panel") {
-            vals.panel_tint_hex = hex;
-        }
-        // Dash opacity
-        if let Some(v) = extract_alpha_opacity(&shell_css, "#dash") {
-            vals.dash_opacity = (v * 100.0).round();
-        }
-    }
-
-    vals
-}
-
-/// Extract a `Xpx` value after a pattern like `selector { border-radius: Xpx`.
-fn extract_px(css: &str, pattern: &str) -> Option<f64> {
-    let idx = css.find(pattern)?;
-    let after = &css[idx + pattern.len()..];
-    let trimmed = after.trim_start();
-    let num_end = trimmed.find(|c: char| !c.is_ascii_digit() && c != '.')?;
-    trimmed[..num_end].parse().ok()
-}
-
-/// Extract the mix() percentage from dark mode tint definition.
-fn extract_mix_pct(css: &str) -> Option<f64> {
-    // Find the dark mode section and look for a mix() with @accent_bg_color
-    let dark_idx = css.find("prefers-color-scheme: dark")?;
-    let dark_section = &css[dark_idx..];
-    let mix_idx = dark_section.find("mix(#222226, @accent_bg_color,")?;
-    let after = &dark_section[mix_idx..];
-    let comma_idx = after.rfind(',')?;
-    let rest = after[comma_idx + 1..].trim_start();
-    let end = rest.find(')')?;
-    rest[..end].trim().parse().ok()
-}
-
-/// Extract the opacity value from `alpha(#xxx, OPACITY)` in a selector block.
-fn extract_alpha_opacity(css: &str, selector: &str) -> Option<f64> {
-    let sel_idx = css.find(selector)?;
-    let block = &css[sel_idx..];
-    let alpha_idx = block.find("alpha(")?;
-    let after = &block[alpha_idx..];
-    let comma = after.find(',')?;
-    let rest = &after[comma + 1..];
-    let paren = rest.find(')')?;
-    rest[..paren].trim().parse().ok()
-}
-
-/// Extract the hex color from `alpha(#xxxxxx, ...)` in a selector block.
-fn extract_alpha_color(css: &str, selector: &str) -> Option<String> {
-    let sel_idx = css.find(selector)?;
-    let block = &css[sel_idx..];
-    let alpha_idx = block.find("alpha(")?;
-    let after = &block[alpha_idx + 6..];
-    let comma = after.find(',')?;
-    let hex = after[..comma].trim();
-    if hex.starts_with('#') {
-        Some(hex.to_owned())
-    } else {
-        None
-    }
-}
-
-/// Extract panel border-radius from `border-radius: 0 0 Xpx Xpx`.
-fn extract_panel_radius(css: &str) -> Option<f64> {
-    let panel_idx = css.find("#panel")?;
-    let block = &css[panel_idx..];
-    let br_idx = block.find("border-radius:")?;
-    let after = &block[br_idx + 14..];
-    // Format: "0 0 Xpx Xpx" — find the third token
-    let tokens: Vec<&str> = after.trim_start().split_whitespace().take(4).collect();
-    if tokens.len() >= 3 {
-        tokens[2].trim_end_matches("px").parse().ok()
-    } else {
-        None
-    }
-}
-
 // --- Wallpaper color extraction (Material You style) ---
 
 /// Extract dominant colors from a wallpaper image and map them to GNOME accent colors.
-/// Returns up to 5 color swatches as (hex, closest_accent_id) pairs.
-fn extract_wallpaper_colors(
-    path: &str,
-) -> Result<Vec<(String, String)>, String> {
-    // Load and downscale image for fast processing
+fn extract_wallpaper_colors(path: &str) -> Result<Vec<(String, String)>, String> {
+    use gnomex_domain::color::{rgb_to_hsv, hsv_to_rgb};
+
     let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(path, 64, 64, true)
         .map_err(|e| format!("failed to load wallpaper: {e}"))?;
 
@@ -1301,62 +2139,42 @@ fn extract_wallpaper_colors(
     let channels = pixbuf.n_channels() as usize;
     let data = pixels.as_ref();
 
-    // Collect pixel colors as (H, S, V) with enough saturation to be interesting
-    let mut color_buckets: std::collections::HashMap<(u16, u8, u8), u32> = std::collections::HashMap::new();
+    let mut color_buckets: std::collections::HashMap<(u16, u8, u8), u32> =
+        std::collections::HashMap::new();
 
     for chunk in data.chunks_exact(channels) {
-        if channels < 3 {
-            continue;
-        }
+        if channels < 3 { continue; }
         let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
-        let (h, s, v) = gnomex_domain::color::rgb_to_hsv(r, g, b);
-
-        // Skip near-grey, very dark, or very bright pixels
-        if s < 15 || v < 25 || v > 240 {
-            continue;
-        }
-
-        // Bucket: hue in 10-degree bins, saturation in 3 bins, value in 3 bins
+        let (h, s, v) = rgb_to_hsv(r, g, b);
+        if s < 15 || v < 25 || v > 240 { continue; }
         let hue_bin = (h / 10) * 10;
         let sat_bin = (s / 85).min(2);
         let val_bin = (v / 85).min(2);
         *color_buckets.entry((hue_bin, sat_bin, val_bin)).or_default() += 1;
     }
 
-    // Sort by frequency, take top clusters
     let mut buckets: Vec<_> = color_buckets.into_iter().collect();
     buckets.sort_by(|a, b| b.1.cmp(&a.1));
 
     let mut results = Vec::new();
     let mut used_accents = std::collections::HashSet::new();
 
-    for ((hue_bin, sat_bin, val_bin), _count) in buckets.iter().take(15) {
-        // Reconstruct a representative color from the bucket center
+    for ((hue_bin, sat_bin, val_bin), _) in buckets.iter().take(15) {
         let h = *hue_bin + 5;
         let s = (*sat_bin as u16) * 85 + 42;
         let v = (*val_bin as u16) * 85 + 42;
-        let (r, g, b) = gnomex_domain::color::hsv_to_rgb(h, s.min(255) as u8, v.min(255) as u8);
+        let (r, g, b) = hsv_to_rgb(h, s.min(255) as u8, v.min(255) as u8);
         let hex = format!("#{:02x}{:02x}{:02x}", r, g, b);
-
-        // Map to closest GNOME accent color
         let accent_id = closest_accent(r, g, b);
-
-        // Only include each accent once
-        if used_accents.contains(&accent_id) {
-            continue;
-        }
+        if used_accents.contains(&accent_id) { continue; }
         used_accents.insert(accent_id.clone());
         results.push((hex, accent_id));
-
-        if results.len() >= 5 {
-            break;
-        }
+        if results.len() >= 5 { break; }
     }
 
     Ok(results)
 }
 
-/// Find the closest GNOME accent color for an RGB value.
 fn closest_accent(r: u8, g: u8, b: u8) -> String {
     use gnomex_domain::color::color_distance;
 
@@ -1375,13 +2193,4 @@ fn closest_accent(r: u8, g: u8, b: u8) -> String {
     }
 
     best_id.to_owned()
-}
-
-// Color utilities delegate to gnomex_domain::color
-
-/// Convenience re-export of dirs for home directory.
-mod dirs {
-    pub fn home_dir() -> Option<std::path::PathBuf> {
-        std::env::var("HOME").ok().map(std::path::PathBuf::from)
-    }
 }
