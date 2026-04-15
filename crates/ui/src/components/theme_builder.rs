@@ -56,6 +56,14 @@ pub enum ThemeBuilderMsg {
     SetTintIntensity(f64),
     SetDashOpacity(f64),
     SetOverviewBlur(bool),
+    SetColorScheme(String),
+    SetFont(String),
+    SetMonoFont(String),
+    SetTextScale(f64),
+    SetFontHinting(String),
+    SetCursorSize(i32),
+    SetAnimations(bool),
+    SetHotCorners(bool),
     RefreshCompat,
     Apply,
     Reset,
@@ -376,6 +384,196 @@ impl SimpleComponent for ThemeBuilderModel {
 
         outer.append(&dash_group);
 
+        // === Color Scheme ===
+        let scheme_group = adw::PreferencesGroup::builder()
+            .title("Color Scheme")
+            .description("Control light and dark appearance")
+            .build();
+
+        let iface = gio::Settings::new("org.gnome.desktop.interface");
+        let current_scheme = iface.string("color-scheme").to_string();
+
+        let scheme_row = adw::ComboRow::builder()
+            .title("Appearance")
+            .subtitle("Set the system color scheme for all apps")
+            .build();
+        let scheme_list = gtk::StringList::new(&["Default", "Prefer Light", "Prefer Dark"]);
+        scheme_row.set_model(Some(&scheme_list));
+        scheme_row.set_selected(match current_scheme.as_str() {
+            "prefer-light" => 1,
+            "prefer-dark" => 2,
+            _ => 0,
+        });
+        {
+            let sender = sender.clone();
+            scheme_row.connect_selected_notify(move |row| {
+                let scheme = match row.selected() {
+                    1 => "prefer-light",
+                    2 => "prefer-dark",
+                    _ => "default",
+                };
+                sender.input(ThemeBuilderMsg::SetColorScheme(scheme.into()));
+            });
+        }
+        scheme_group.add(&scheme_row);
+        outer.append(&scheme_group);
+
+        // === Typography ===
+        let font_group = adw::PreferencesGroup::builder()
+            .title("Typography")
+            .description("Fonts and text rendering")
+            .build();
+
+        let current_font = iface.string("font-name").to_string();
+        let font_row = adw::ActionRow::builder()
+            .title("Interface Font")
+            .subtitle(&current_font)
+            .activatable(true)
+            .build();
+        let font_btn = gtk::FontDialogButton::builder()
+            .valign(gtk::Align::Center)
+            .build();
+        let font_dialog = gtk::FontDialog::builder()
+            .title("Interface Font")
+            .build();
+        font_btn.set_dialog(&font_dialog);
+        if let Some(desc) = gtk::pango::FontDescription::from_string(&current_font).into() {
+            font_btn.set_font_desc(&desc);
+        }
+        {
+            let sender = sender.clone();
+            font_btn.connect_font_desc_notify(move |btn| {
+                if let Some(desc) = btn.font_desc() {
+                    sender.input(ThemeBuilderMsg::SetFont(desc.to_string()));
+                }
+            });
+        }
+        font_row.add_suffix(&font_btn);
+        font_group.add(&font_row);
+
+        let current_mono = iface.string("monospace-font-name").to_string();
+        let mono_row = adw::ActionRow::builder()
+            .title("Monospace Font")
+            .subtitle(&current_mono)
+            .activatable(true)
+            .build();
+        let mono_btn = gtk::FontDialogButton::builder()
+            .valign(gtk::Align::Center)
+            .build();
+        let mono_dialog = gtk::FontDialog::builder()
+            .title("Monospace Font")
+            .build();
+        mono_btn.set_dialog(&mono_dialog);
+        if let Some(desc) = gtk::pango::FontDescription::from_string(&current_mono).into() {
+            mono_btn.set_font_desc(&desc);
+        }
+        {
+            let sender = sender.clone();
+            mono_btn.connect_font_desc_notify(move |btn| {
+                if let Some(desc) = btn.font_desc() {
+                    sender.input(ThemeBuilderMsg::SetMonoFont(desc.to_string()));
+                }
+            });
+        }
+        mono_row.add_suffix(&mono_btn);
+        font_group.add(&mono_row);
+
+        let current_scale = iface.double("text-scaling-factor");
+        let scale_row = build_spin_row(
+            "Text Scaling",
+            "Scale factor for all text (1.0 = 100%)",
+            0.5, 3.0, current_scale, 0.1,
+        );
+        {
+            let sender = sender.clone();
+            scale_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetTextScale(row.value()));
+            });
+        }
+        font_group.add(&scale_row);
+
+        let current_hinting = iface.string("font-hinting").to_string();
+        let hinting_row = adw::ComboRow::builder()
+            .title("Font Hinting")
+            .subtitle("Controls sharpness of text at small sizes")
+            .build();
+        let hinting_list = gtk::StringList::new(&["None", "Slight", "Medium", "Full"]);
+        hinting_row.set_model(Some(&hinting_list));
+        hinting_row.set_selected(match current_hinting.as_str() {
+            "none" => 0,
+            "slight" => 1,
+            "medium" => 2,
+            _ => 3,
+        });
+        {
+            let sender = sender.clone();
+            hinting_row.connect_selected_notify(move |row| {
+                let hint = match row.selected() {
+                    0 => "none",
+                    1 => "slight",
+                    2 => "medium",
+                    _ => "full",
+                };
+                sender.input(ThemeBuilderMsg::SetFontHinting(hint.into()));
+            });
+        }
+        font_group.add(&hinting_row);
+        outer.append(&font_group);
+
+        // === Cursor ===
+        let cursor_group = adw::PreferencesGroup::builder()
+            .title("Cursor")
+            .description("Pointer appearance")
+            .build();
+
+        let current_cursor_size = iface.int("cursor-size") as f64;
+        let cursor_size_row = build_spin_row(
+            "Cursor Size",
+            "Size of the mouse pointer in pixels",
+            16.0, 96.0, current_cursor_size, 8.0,
+        );
+        {
+            let sender = sender.clone();
+            cursor_size_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetCursorSize(row.value() as i32));
+            });
+        }
+        cursor_group.add(&cursor_size_row);
+        outer.append(&cursor_group);
+
+        // === Desktop Behavior ===
+        let behavior_group = adw::PreferencesGroup::builder()
+            .title("Desktop Behavior")
+            .description("System-wide interaction settings")
+            .build();
+
+        let animations_switch = adw::SwitchRow::builder()
+            .title("Animations")
+            .subtitle("Enable or disable UI transitions and animations")
+            .active(iface.boolean("enable-animations"))
+            .build();
+        {
+            let sender = sender.clone();
+            animations_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetAnimations(row.is_active()));
+            });
+        }
+        behavior_group.add(&animations_switch);
+
+        let hot_corners_switch = adw::SwitchRow::builder()
+            .title("Hot Corners")
+            .subtitle("Trigger Activities by pushing the pointer to the top-left corner")
+            .active(iface.boolean("enable-hot-corners"))
+            .build();
+        {
+            let sender = sender.clone();
+            hot_corners_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetHotCorners(row.is_active()));
+            });
+        }
+        behavior_group.add(&hot_corners_switch);
+        outer.append(&behavior_group);
+
         // === Action buttons ===
         let action_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -546,6 +744,46 @@ impl SimpleComponent for ThemeBuilderModel {
             }
             ThemeBuilderMsg::SetDashOpacity(v) => self.dash_opacity = v,
             ThemeBuilderMsg::SetOverviewBlur(v) => self.overview_blur = v,
+            ThemeBuilderMsg::SetColorScheme(scheme) => {
+                let iface = gio::Settings::new("org.gnome.desktop.interface");
+                let _ = iface.set_string("color-scheme", &scheme);
+                tracing::info!("color scheme set to: {scheme}");
+            }
+            ThemeBuilderMsg::SetFont(font) => {
+                let iface = gio::Settings::new("org.gnome.desktop.interface");
+                let _ = iface.set_string("font-name", &font);
+                tracing::info!("font set to: {font}");
+            }
+            ThemeBuilderMsg::SetMonoFont(font) => {
+                let iface = gio::Settings::new("org.gnome.desktop.interface");
+                let _ = iface.set_string("monospace-font-name", &font);
+                tracing::info!("monospace font set to: {font}");
+            }
+            ThemeBuilderMsg::SetTextScale(scale) => {
+                let iface = gio::Settings::new("org.gnome.desktop.interface");
+                let _ = iface.set_double("text-scaling-factor", scale);
+                tracing::info!("text scale set to: {scale}");
+            }
+            ThemeBuilderMsg::SetFontHinting(hinting) => {
+                let iface = gio::Settings::new("org.gnome.desktop.interface");
+                let _ = iface.set_string("font-hinting", &hinting);
+                tracing::info!("font hinting set to: {hinting}");
+            }
+            ThemeBuilderMsg::SetCursorSize(size) => {
+                let iface = gio::Settings::new("org.gnome.desktop.interface");
+                let _ = iface.set_int("cursor-size", size);
+                tracing::info!("cursor size set to: {size}");
+            }
+            ThemeBuilderMsg::SetAnimations(enabled) => {
+                let iface = gio::Settings::new("org.gnome.desktop.interface");
+                let _ = iface.set_boolean("enable-animations", enabled);
+                tracing::info!("animations: {enabled}");
+            }
+            ThemeBuilderMsg::SetHotCorners(enabled) => {
+                let iface = gio::Settings::new("org.gnome.desktop.interface");
+                let _ = iface.set_boolean("enable-hot-corners", enabled);
+                tracing::info!("hot corners: {enabled}");
+            }
             ThemeBuilderMsg::RefreshCompat => {
                 if let Ok(spec) = self.build_spec() {
                     let report = theme_capability::compatibility_report(&spec);
