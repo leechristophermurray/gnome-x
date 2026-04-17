@@ -1,0 +1,51 @@
+/* GNOME X Integration — shell-side styling.
+ *
+ * GNOME Shell CSS is a restricted subset of standard CSS (no
+ * backdrop-filter, no media queries for color-scheme, no cascade
+ * layers). Keep rules simple and prefer direct property assignments.
+ */
+
+.gnomex-floating-dock {
+    background-color: rgba(40, 40, 44, 0.88);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 6px;
+}
+
+.gnomex-floating-dock-box {
+    spacing: 4px;
+}
+
+.gnomex-dock-icon {
+    border-radius: 10px;
+    padding: 6px;
+    transition-duration: 200ms;
+}
+
+.gnomex-dock-icon:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.gnomex-dock-icon:active,
+.gnomex-dock-icon:focus {
+    background-color: rgba(255, 255, 255, 0.14);
+}
+
+/* A small brighter trim under running apps so users can tell
+ * favourites apart from transient running apps at a glance.
+ */
+.gnomex-dock-icon.running {
+    border-bottom: 2px solid rgba(255, 255, 255, 0.5);
+}
+
+.gnomex-dock-separator {
+    background-color: rgba(255, 255, 255, 0.14);
+    width: 1px;
+    margin: 6px 6px;
+}
+
+.gnomex-dock-placeholder {
+    color: rgba(255, 255, 255, 0.5);
+    padding: 12px 18px;
+    font-size: 12px;
+}

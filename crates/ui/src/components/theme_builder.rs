@@ -30,6 +30,8 @@ const ACCENT_COLORS: &[(&str, &str, &str)] = &[
 /// Current theme builder state.
 pub struct ThemeBuilderModel {
     apply_uc: Arc<ApplyThemeUseCase>,
+    floating_dock: Arc<dyn gnomex_app::ports::FloatingDockController>,
+    blur_my_shell: Arc<dyn gnomex_app::ports::BlurMyShellController>,
     detected_version: String,
     wallpaper_swatches: Vec<gtk::Box>, // one per extract row (single, day, night)
     color_pickers: Vec<gtk::Box>,     // picker widgets to deselect on wallpaper pick
@@ -97,6 +99,7 @@ pub enum ThemeBuilderMsg {
     SetTintIntensity(f64),
     SetDashOpacity(f64),
     SetOverviewBlur(bool),
+    SetFloatingDock(bool),
     SetSharedTinting(bool),
     RefreshVisibility,
     SetUseAccentForPanel(bool),
@@ -655,10 +658,18 @@ impl SimpleComponent for ThemeBuilderModel {
         }
         dash_group.add(&dash_opacity);
 
+        let bms_available = gio::SettingsSchemaSource::default()
+            .and_then(|src| src.lookup("org.gnome.shell.extensions.blur-my-shell.overview", true))
+            .is_some();
+        let blur_subtitle = if bms_available {
+            "Blur the wallpaper and dim the overview"
+        } else {
+            "Dim the overview — install Blur My Shell for real wallpaper blur"
+        };
         let blur_switch = adw::SwitchRow::builder()
             .title("Overview Background Blur")
-            .subtitle("Apply a blur effect to the overview background")
-            .active(true)
+            .subtitle(blur_subtitle)
+            .active(app_settings.boolean("tb-overview-blur"))
             .build();
         {
             let sender = sender.clone();
@@ -667,6 +678,29 @@ impl SimpleComponent for ThemeBuilderModel {
             });
         }
         dash_group.add(&blur_switch);
+
+        // === Floating Dock — requires the Dash to Dock extension ===
+        let dtd_available = gio::SettingsSchemaSource::default()
+            .and_then(|src| src.lookup("org.gnome.shell.extensions.dash-to-dock", true))
+            .is_some();
+        let floating_subtitle = if dtd_available {
+            "Turn the dash into an always-visible floating dock"
+        } else {
+            "Requires the Dash to Dock extension — install it first"
+        };
+        let floating_dock = adw::SwitchRow::builder()
+            .title("Floating Dock")
+            .subtitle(floating_subtitle)
+            .active(app_settings.boolean("tb-floating-dock-enabled"))
+            .sensitive(dtd_available)
+            .build();
+        {
+            let sender = sender.clone();
+            floating_dock.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetFloatingDock(row.is_active()));
+            });
+        }
+        dash_group.add(&floating_dock);
 
         // appended in final ordering
 
@@ -1479,6 +1513,8 @@ impl SimpleComponent for ThemeBuilderModel {
 
         let model = ThemeBuilderModel {
             apply_uc: services.apply_theme,
+            floating_dock: services.floating_dock,
+            blur_my_shell: services.blur_my_shell,
             detected_version: services.detected_gnome_version,
             wallpaper_swatches: vec![
                 wallpaper_swatches.clone(),
@@ -1688,7 +1724,38 @@ impl SimpleComponent for ThemeBuilderModel {
                 self.tint_intensity = v;
             }
             ThemeBuilderMsg::SetDashOpacity(v) => self.dash_opacity = v,
-            ThemeBuilderMsg::SetOverviewBlur(v) => self.overview_blur = v,
+            ThemeBuilderMsg::SetOverviewBlur(v) => {
+                self.overview_blur = v;
+                // Persist immediately so the value round-trips through
+                // Experience Packs even before the user hits Apply. The
+                // GNOME X Integration extension listens to this key and
+                // drives the native blur; the BMS fallback below only
+                // kicks in when that extension isn't enabled.
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_boolean("tb-overview-blur", v);
+                if !gnomex_extension_enabled() && self.blur_my_shell.is_available() {
+                    if let Err(e) = self.blur_my_shell.apply(v) {
+                        tracing::warn!("blur my shell apply failed: {e}");
+                    }
+                }
+            }
+            ThemeBuilderMsg::SetFloatingDock(enabled) => {
+                // Persist the toggle even if neither our extension nor
+                // Dash to Dock is present — the value round-trips through
+                // Experience Packs and reactivates once one is available.
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_boolean("tb-floating-dock-enabled", enabled);
+                if !gnomex_extension_enabled() {
+                    if let Err(e) = self.floating_dock.apply(enabled) {
+                        tracing::warn!("floating dock apply failed: {e}");
+                    } else {
+                        tracing::info!(
+                            "floating dock: {}",
+                            if enabled { "enabled" } else { "disabled" }
+                        );
+                    }
+                }
+            }
             ThemeBuilderMsg::SetSharedTinting(enabled) => {
                 self.shared_tinting = enabled;
                 let app = gio::Settings::new("io.github.gnomex.GnomeX");
@@ -2111,6 +2178,24 @@ fn current_accent_hex() -> String {
         .find(|(id, _, _)| *id == name)
         .map(|(_, _, hex)| hex.to_string())
         .unwrap_or_else(|| "#3584e4".into())
+}
+
+/// Check whether the bundled `io.github.gnomex@io.github.gnomex`
+/// GNOME Shell extension is currently enabled. When it is, we skip
+/// the BMS / DtD fallback paths because the extension itself listens
+/// to our GSettings keys and drives the effects natively.
+fn gnomex_extension_enabled() -> bool {
+    const UUID: &str = "io.github.gnomex@io.github.gnomex";
+    let has_schema = gio::SettingsSchemaSource::default()
+        .and_then(|src| src.lookup("org.gnome.shell", true))
+        .is_some();
+    if !has_schema {
+        return false;
+    }
+    let s = gio::Settings::new("org.gnome.shell");
+    s.strv("enabled-extensions")
+        .iter()
+        .any(|v| v.as_str() == UUID)
 }
 
 fn build_spin_row(

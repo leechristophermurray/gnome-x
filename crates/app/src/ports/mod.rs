@@ -8,22 +8,28 @@
 
 mod app_settings;
 mod appearance_settings;
+mod blur_my_shell;
 mod content_repository;
 mod external_app_themer;
 mod extension_repository;
+mod floating_dock;
 mod local_installer;
 mod pack_storage;
+mod shell_customizer;
 mod shell_proxy;
 mod theme_css;
 mod theme_writer;
 
 pub use app_settings::*;
 pub use appearance_settings::*;
+pub use blur_my_shell::*;
 pub use content_repository::*;
 pub use external_app_themer::*;
 pub use extension_repository::*;
+pub use floating_dock::*;
 pub use local_installer::*;
 pub use pack_storage::*;
+pub use shell_customizer::*;
 pub use shell_proxy::*;
 pub use theme_css::*;
 pub use theme_writer::*;

@@ -45,10 +45,14 @@ impl Gnome47CssGenerator {
         let po = spec.panel.opacity.as_fraction();
         let do_ = spec.dash.opacity.as_fraction();
 
+        // GNOME Shell has no native wallpaper-blur toggle, so the "blur"
+        // toggle applies a dim overlay on the overview. Real wallpaper
+        // blur is driven by the Blur My Shell extension when present
+        // (see infra::blur_my_shell).
         let blur = if spec.overview_blur {
-            "/* Overview blur enabled via shell settings */"
+            "#overview { background-color: rgba(0, 0, 0, 0.4); }"
         } else {
-            "#overview { background-color: rgba(0, 0, 0, 0.6); }"
+            ""
         };
 
         // GNOME 47+: native accent-color support, updated notification/OSD

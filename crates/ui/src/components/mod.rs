@@ -10,4 +10,5 @@ pub mod installed;
 pub mod pack_row;
 pub mod packs;
 pub mod settings;
+pub mod shell_tweaks;
 pub mod theme_builder;

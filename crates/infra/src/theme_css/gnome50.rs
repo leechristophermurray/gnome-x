@@ -63,15 +63,14 @@ impl Gnome50CssGenerator {
         let po = spec.panel.opacity.as_fraction();
         let do_ = spec.dash.opacity.as_fraction();
 
-        // GNOME 50: prefers-reduced-motion guard on blur effects
+        // GNOME Shell has no native wallpaper-blur toggle, so the "blur"
+        // toggle applies a dim overlay on the overview. Real wallpaper
+        // blur is driven by the Blur My Shell extension when present
+        // (see infra::blur_my_shell).
         let blur_block = if spec.overview_blur {
-            r#"
-/* Respect reduced-motion preference (Libadwaita 1.9+) */
-@media (prefers-reduced-motion: no-preference) {
-    /* Overview blur enabled */
-}"#
+            "#overview { background-color: rgba(0, 0, 0, 0.4); }"
         } else {
-            "#overview { background-color: rgba(0, 0, 0, 0.6); }"
+            ""
         };
 
         format!(
@@ -141,10 +140,20 @@ mod tests {
     }
 
     #[test]
-    fn shell_css_includes_reduced_motion_guard() {
+    fn overview_blur_emits_dim_overlay_when_enabled() {
+        // The real wallpaper-blur comes from the Blur My Shell extension;
+        // the CSS side of the toggle is a dim overlay on the overview.
         let generator = Gnome50CssGenerator;
-        let css = generator.generate(&test_spec()).unwrap();
-        assert!(css.shell_css.contains("prefers-reduced-motion: no-preference"));
+        let mut spec = test_spec();
+
+        spec.overview_blur = true;
+        let on = generator.generate(&spec).unwrap();
+        assert!(on.shell_css.contains("#overview"));
+        assert!(on.shell_css.contains("rgba(0, 0, 0, 0.4)"));
+
+        spec.overview_blur = false;
+        let off = generator.generate(&spec).unwrap();
+        assert!(!off.shell_css.contains("rgba(0, 0, 0, 0.4)"));
     }
 
     #[test]

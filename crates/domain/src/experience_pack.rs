@@ -1,7 +1,7 @@
 // Copyright 2026 GNOME X Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{DomainError, ShellVersion};
+use crate::{DomainError, ShellTweak, ShellVersion};
 
 /// Reference to a theme within an experience pack.
 #[derive(Debug, Clone)]
@@ -66,6 +66,15 @@ pub struct ExperiencePack {
     pub extensions: Vec<ExtensionRef>,
     pub wallpaper: Option<String>,
     pub gsettings_overrides: Vec<GSettingOverride>,
+    /// Snapshot of [`ShellTweak`]s captured at export time. Typed
+    /// (as opposed to the string-keyed `gsettings_overrides`) so
+    /// cross-version apply can re-route to the right schema for the
+    /// target GNOME version via the `ShellCustomizer` port in
+    /// `gnomex-app`.
+    ///
+    /// Present in `pack_format = 2` packs. v1 packs deserialize this
+    /// as empty.
+    pub shell_tweaks: Vec<ShellTweak>,
 }
 
 impl ExperiencePack {
@@ -76,7 +85,11 @@ impl ExperiencePack {
                 "pack name must not be empty".into(),
             ));
         }
-        if self.pack_format != 1 {
+        // v1: themes + icons + cursors + extensions + gsettings_overrides.
+        // v2: adds `shell_tweaks` (typed ShellTweak entries).
+        // A v1 pack loaded by a v2-capable app simply has an empty
+        // `shell_tweaks` vector.
+        if !matches!(self.pack_format, 1 | 2) {
             return Err(DomainError::InvalidPack(format!(
                 "unsupported pack format: {}",
                 self.pack_format,
@@ -133,6 +146,7 @@ mod tests {
             ],
             wallpaper: None,
             gsettings_overrides: vec![],
+            shell_tweaks: vec![],
         }
     }
 
@@ -153,6 +167,15 @@ mod tests {
         let mut pack = sample_pack();
         pack.pack_format = 99;
         assert!(pack.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_v1_and_v2() {
+        let mut pack = sample_pack();
+        pack.pack_format = 1;
+        assert!(pack.validate().is_ok());
+        pack.pack_format = 2;
+        assert!(pack.validate().is_ok());
     }
 
     #[test]

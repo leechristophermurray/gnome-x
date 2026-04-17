@@ -37,6 +37,15 @@ assets = [
     ["../../data/icons/symbolic/apps/io.github.gnomex.GnomeX-symbolic.svg",  "usr/share/icons/hicolor/symbolic/apps/io.github.gnomex.GnomeX-symbolic.svg", "644"],
     ["../../data/systemd/experienced.service",   "usr/lib/systemd/user/experienced.service",          "644"],
     ["../../data/systemd/50-gnome-x.preset",     "usr/lib/systemd/user-preset/50-gnome-x.preset",     "644"],
+    ["../../extension/io.github.gnomex@io.github.gnomex/metadata.json",           "usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/metadata.json",           "644"],
+    ["../../extension/io.github.gnomex@io.github.gnomex/extension.js",            "usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/extension.js",            "644"],
+    ["../../extension/io.github.gnomex@io.github.gnomex/stylesheet.css",          "usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/stylesheet.css",          "644"],
+    ["../../extension/io.github.gnomex@io.github.gnomex/lib/shell_customizer.js", "usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/shell_customizer.js", "644"],
+    ["../../extension/io.github.gnomex@io.github.gnomex/lib/floating_dock.js",    "usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/floating_dock.js",    "644"],
+    ["../../extension/io.github.gnomex@io.github.gnomex/lib/gnome45_customizer.js", "usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/gnome45_customizer.js", "644"],
+    ["../../extension/io.github.gnomex@io.github.gnomex/lib/gnome46_customizer.js", "usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/gnome46_customizer.js", "644"],
+    ["../../extension/io.github.gnomex@io.github.gnomex/lib/gnome47_customizer.js", "usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/gnome47_customizer.js", "644"],
+    ["../../extension/io.github.gnomex@io.github.gnomex/lib/gnome50_customizer.js", "usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/gnome50_customizer.js", "644"],
     ["../../LICENSE",  "usr/share/doc/gnome-x/copyright",  "644"],
     ["../../README.md", "usr/share/doc/gnome-x/README.md", "644"],
 ]
@@ -116,6 +125,51 @@ mode = "644"
 [[package.metadata.generate-rpm.assets]]
 source = "../../data/systemd/50-gnome-x.preset"
 dest = "/usr/lib/systemd/user-preset/50-gnome-x.preset"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../extension/io.github.gnomex@io.github.gnomex/metadata.json"
+dest = "/usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/metadata.json"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../extension/io.github.gnomex@io.github.gnomex/extension.js"
+dest = "/usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/extension.js"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../extension/io.github.gnomex@io.github.gnomex/stylesheet.css"
+dest = "/usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/stylesheet.css"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../extension/io.github.gnomex@io.github.gnomex/lib/shell_customizer.js"
+dest = "/usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/shell_customizer.js"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../extension/io.github.gnomex@io.github.gnomex/lib/floating_dock.js"
+dest = "/usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/floating_dock.js"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../extension/io.github.gnomex@io.github.gnomex/lib/gnome45_customizer.js"
+dest = "/usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/gnome45_customizer.js"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../extension/io.github.gnomex@io.github.gnomex/lib/gnome46_customizer.js"
+dest = "/usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/gnome46_customizer.js"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../extension/io.github.gnomex@io.github.gnomex/lib/gnome47_customizer.js"
+dest = "/usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/gnome47_customizer.js"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../extension/io.github.gnomex@io.github.gnomex/lib/gnome50_customizer.js"
+dest = "/usr/share/gnome-shell/extensions/io.github.gnomex@io.github.gnomex/lib/gnome50_customizer.js"
 mode = "644"
 
 [[package.metadata.generate-rpm.assets]]

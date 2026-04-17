@@ -10,15 +10,16 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use gio::prelude::*;
-use gnomex_app::ports::ShellProxy;
-use gnomex_app::use_cases::{ApplyThemeUseCase, PacksUseCase};
+use gnomex_app::ports::{ShellCustomizer, ShellProxy};
+use gnomex_app::use_cases::{ApplyThemeUseCase, CustomizeShellUseCase, PacksUseCase};
 use gnomex_domain::{
     DashSpec, ForegroundSpec, HeaderbarSpec, HexColor, InsetSpec, NotificationSpec, Opacity,
     PanelSpec, Radius, StatusColorSpec, ThemeSpec, TintSpec, WindowFrameSpec,
 };
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
-    GSettingsAppSettings, GSettingsAppearance, OcsClient, PackTomlStorage, VscodeThemer,
+    GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell, GSettingsFloatingDock,
+    OcsClient, PackTomlStorage, VscodeThemer,
 };
 use std::sync::Arc;
 
@@ -243,6 +244,24 @@ fn build_apply_theme_use_case() -> Result<ApplyThemeUseCase> {
         .with_external_themer(Arc::new(ChromiumThemer::new())))
 }
 
+fn build_ext_controllers() -> gnomex_infra::shell_customizer::ExtensionControllers {
+    gnomex_infra::shell_customizer::ExtensionControllers {
+        floating_dock: Arc::new(GSettingsFloatingDock::new()),
+        blur_my_shell: Arc::new(GSettingsBlurMyShell::new()),
+    }
+}
+
+#[allow(dead_code)]
+fn build_customize_shell_use_case() -> Result<CustomizeShellUseCase> {
+    let shell_version = detect_shell_version();
+    let customizer: Arc<dyn ShellCustomizer> =
+        Arc::from(gnomex_infra::shell_customizer::create_shell_customizer(
+            &shell_version,
+            build_ext_controllers(),
+        ));
+    Ok(CustomizeShellUseCase::new(customizer, &shell_version))
+}
+
 fn build_packs_use_case(handle: tokio::runtime::Handle) -> Result<PacksUseCase> {
     let ego_client: Arc<EgoClient> = Arc::new(EgoClient::new());
     let ocs_client: Arc<OcsClient> = Arc::new(OcsClient::new());
@@ -250,6 +269,12 @@ fn build_packs_use_case(handle: tokio::runtime::Handle) -> Result<PacksUseCase> 
     let appearance: Arc<GSettingsAppearance> = Arc::new(GSettingsAppearance::new());
     let pack_storage: Arc<PackTomlStorage> = Arc::new(PackTomlStorage::new());
     let app_settings: Arc<GSettingsAppSettings> = Arc::new(GSettingsAppSettings::new());
+    let shell_version = detect_shell_version();
+    let shell_customizer: Arc<dyn ShellCustomizer> =
+        Arc::from(gnomex_infra::shell_customizer::create_shell_customizer(
+            &shell_version,
+            build_ext_controllers(),
+        ));
     let shell_proxy: Arc<DbusShellProxy> = Arc::new(
         handle
             .block_on(DbusShellProxy::new())
@@ -263,6 +288,7 @@ fn build_packs_use_case(handle: tokio::runtime::Handle) -> Result<PacksUseCase> 
         installer,
         ocs_client,
         app_settings,
+        shell_customizer,
     ))
 }
 

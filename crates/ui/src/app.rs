@@ -8,6 +8,7 @@ use crate::components::explore::{ExploreModel, ExploreOutput};
 use crate::components::installed::{InstalledModel, InstalledOutput};
 use crate::components::packs::{PacksModel, PacksOutput};
 use crate::components::settings::SettingsModel;
+use crate::components::shell_tweaks::ShellTweaksModel;
 use crate::components::theme_builder::{ThemeBuilderModel, ThemeBuilderOutput};
 use crate::services::AppServices;
 use adw::prelude::*;
@@ -24,6 +25,8 @@ pub struct AppModel {
     packs: Controller<PacksModel>,
     #[allow(dead_code)]
     settings: Controller<SettingsModel>,
+    #[allow(dead_code)]
+    shell_tweaks: Controller<ShellTweaksModel>,
     toast_overlay: adw::ToastOverlay,
 }
 
@@ -77,6 +80,10 @@ impl SimpleComponent for AppModel {
 
         let settings = SettingsModel::builder().launch(()).detach();
 
+        let shell_tweaks = ShellTweaksModel::builder()
+            .launch(services.clone())
+            .detach();
+
         // Build the layout with ToastOverlay wrapping ToolbarView
         let toast_overlay = adw::ToastOverlay::new();
 
@@ -125,6 +132,12 @@ impl SimpleComponent for AppModel {
             "package-x-generic-symbolic",
         );
         view_stack.add_titled_with_icon(
+            shell_tweaks.widget(),
+            Some("shell"),
+            "Shell",
+            "preferences-desktop-symbolic",
+        );
+        view_stack.add_titled_with_icon(
             settings.widget(),
             Some("settings"),
             "Settings",
@@ -137,6 +150,7 @@ impl SimpleComponent for AppModel {
             theme_builder,
             packs,
             settings,
+            shell_tweaks,
             toast_overlay: toast_overlay.clone(),
         };
 

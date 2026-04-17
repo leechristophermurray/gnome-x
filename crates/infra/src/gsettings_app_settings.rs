@@ -42,6 +42,7 @@ const PACK_KEYS: &[&str] = &[
     "tb-circular-buttons",
     "tb-show-window-shadow",
     "tb-combo-inset",
+    "tb-floating-dock-enabled",
     // Accent scheduling
     "scheduled-accent-enabled",
     "day-accent-color",

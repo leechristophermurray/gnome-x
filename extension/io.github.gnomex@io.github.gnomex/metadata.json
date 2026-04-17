@@ -1,0 +1,9 @@
+{
+    "uuid": "io.github.gnomex@io.github.gnomex",
+    "name": "GNOME X Integration",
+    "description": "Native shell-side customizations for the GNOME X customization hub: overview wallpaper blur and always-visible floating dock. Reads state from io.github.gnomex.GnomeX so the Rust side drives effects via ordinary GSettings writes.",
+    "shell-version": ["45", "46", "47", "48", "49"],
+    "url": "https://github.com/gnomex/gnome-x",
+    "settings-schema": "io.github.gnomex.GnomeX",
+    "version": 1
+}

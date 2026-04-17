@@ -4,8 +4,8 @@
 use gnomex_app::ports::{PackStorage, PackSummary};
 use gnomex_app::AppError;
 use gnomex_domain::{
-    CursorPackRef, ExperiencePack, ExtensionRef, GSettingOverride, IconPackRef, ShellVersion,
-    ThemeRef,
+    CursorPackRef, ExperiencePack, ExtensionRef, GSettingOverride, IconPackRef, ShellTweak,
+    ShellTweakId, ShellVersion, ThemeRef, TweakValue,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -52,6 +52,10 @@ struct PackFile {
     extensions: Vec<ExtensionEntry>,
     #[serde(default)]
     settings: Vec<SettingEntry>,
+    /// Present in `pack_format = 2` packs. `#[serde(default)]` keeps
+    /// v1 packs deserializing cleanly.
+    #[serde(default, rename = "shell_tweaks")]
+    shell_tweaks: Vec<ShellTweakEntry>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -98,6 +102,15 @@ fn default_true() -> bool {
 #[derive(Serialize, Deserialize)]
 struct SettingEntry {
     key: String,
+    value: String,
+}
+
+/// DTO for a single shell tweak in `[[shell_tweaks]]`.
+/// `id` is a stable snake_case slug; `value` is a string whose shape
+/// depends on the id's domain type (bool/int/enum/position).
+#[derive(Serialize, Deserialize)]
+struct ShellTweakEntry {
+    id: String,
     value: String,
 }
 
@@ -199,6 +212,28 @@ fn pack_file_to_domain(pf: PackFile) -> Result<ExperiencePack, AppError> {
                 value: s.value.clone(),
             })
             .collect(),
+        shell_tweaks: pf
+            .shell_tweaks
+            .iter()
+            .filter_map(|e| {
+                // Forward-compat: tweaks a newer version introduced
+                // and this build doesn't know about just get dropped
+                // with a debug log. Malformed values likewise.
+                let id = ShellTweakId::from_slug(&e.id).or_else(|| {
+                    tracing::debug!("pack load: unknown shell_tweak id '{}' — skipped", e.id);
+                    None
+                })?;
+                let value = TweakValue::parse_for_id(id, &e.value).or_else(|| {
+                    tracing::warn!(
+                        "pack load: can't parse shell_tweak '{}' value '{}' — skipped",
+                        e.id,
+                        e.value
+                    );
+                    None
+                })?;
+                Some(ShellTweak { id, value })
+            })
+            .collect(),
     })
 }
 
@@ -241,6 +276,14 @@ fn domain_to_pack_file(pack: &ExperiencePack) -> PackFile {
             .map(|s| SettingEntry {
                 key: s.key.clone(),
                 value: s.value.clone(),
+            })
+            .collect(),
+        shell_tweaks: pack
+            .shell_tweaks
+            .iter()
+            .map(|t| ShellTweakEntry {
+                id: t.id.slug().to_owned(),
+                value: t.value.as_toml_string(),
             })
             .collect(),
     }
@@ -403,4 +446,130 @@ fn load_pack_from_path(path: &Path) -> Result<ExperiencePack, AppError> {
     let pf: PackFile =
         toml::from_str(&content).map_err(|e| AppError::Storage(e.to_string()))?;
     pack_file_to_domain(pf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gnomex_domain::{PanelPosition, ShellTweakId, TweakValue};
+
+    fn pack_fixture(shell_tweaks: Vec<ShellTweak>) -> ExperiencePack {
+        ExperiencePack {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            description: "For tests".into(),
+            author: "tester".into(),
+            created_at: "0".into(),
+            shell_version: ShellVersion::new(47, 0),
+            pack_format: 2,
+            gtk_theme: None,
+            shell_theme: None,
+            icon_pack: None,
+            cursor_pack: None,
+            extensions: Vec::new(),
+            wallpaper: None,
+            gsettings_overrides: Vec::new(),
+            shell_tweaks,
+        }
+    }
+
+    #[test]
+    fn shell_tweaks_round_trip_through_toml() {
+        let tweaks = vec![
+            ShellTweak {
+                id: ShellTweakId::EnableAnimations,
+                value: TweakValue::Bool(true),
+            },
+            ShellTweak {
+                id: ShellTweakId::ClockFormat,
+                value: TweakValue::Enum("24h".into()),
+            },
+            ShellTweak {
+                id: ShellTweakId::AppsGridColumns,
+                value: TweakValue::Int(6),
+            },
+            ShellTweak {
+                id: ShellTweakId::TopBarPosition,
+                value: TweakValue::Position(PanelPosition::Bottom),
+            },
+        ];
+        let pack = pack_fixture(tweaks.clone());
+        let pf = domain_to_pack_file(&pack);
+        let toml_str = toml::to_string_pretty(&pf).expect("serialize");
+        let back: PackFile = toml::from_str(&toml_str).expect("deserialize");
+        let loaded = pack_file_to_domain(back).expect("domain round trip");
+        assert_eq!(loaded.shell_tweaks, tweaks);
+    }
+
+    #[test]
+    fn v1_toml_without_shell_tweaks_still_loads() {
+        // A pack written by v0.2 (pack_format = 1) — no [[shell_tweaks]]
+        // table at all. It must deserialize cleanly with an empty tweak
+        // vector, not an error.
+        let v1_toml = r#"
+[pack]
+id = "legacy"
+name = "Legacy Pack"
+description = "Pre-v2"
+author = "tester"
+created = "0"
+shell_version = "47.0"
+pack_format = 1
+"#;
+        let pf: PackFile = toml::from_str(v1_toml).expect("v1 parses");
+        let pack = pack_file_to_domain(pf).expect("domain map");
+        assert_eq!(pack.pack_format, 1);
+        assert!(pack.shell_tweaks.is_empty());
+        assert!(pack.validate().is_ok());
+    }
+
+    #[test]
+    fn unknown_shell_tweak_slug_is_skipped_not_fatal() {
+        // Forward-compat: a pack written by a *newer* version of the
+        // app may carry tweak ids we don't know about. Drop them with
+        // a log line rather than failing the whole load.
+        let forward_compat_toml = r#"
+[pack]
+id = "forward"
+name = "Forward-Compat"
+description = ""
+author = "tester"
+created = "0"
+shell_version = "47.0"
+pack_format = 2
+
+[[shell_tweaks]]
+id = "enable_animations"
+value = "true"
+
+[[shell_tweaks]]
+id = "invented_in_v3"
+value = "whatever"
+"#;
+        let pf: PackFile = toml::from_str(forward_compat_toml).expect("parses");
+        let pack = pack_file_to_domain(pf).expect("domain map");
+        assert_eq!(pack.shell_tweaks.len(), 1);
+        assert_eq!(pack.shell_tweaks[0].id, ShellTweakId::EnableAnimations);
+    }
+
+    #[test]
+    fn malformed_shell_tweak_value_is_skipped() {
+        let toml_str = r#"
+[pack]
+id = "malformed"
+name = "Malformed Values"
+description = ""
+author = "tester"
+created = "0"
+shell_version = "47.0"
+pack_format = 2
+
+[[shell_tweaks]]
+id = "apps_grid_columns"
+value = "not_a_number"
+"#;
+        let pf: PackFile = toml::from_str(toml_str).expect("parses");
+        let pack = pack_file_to_domain(pf).expect("domain map");
+        assert!(pack.shell_tweaks.is_empty());
+    }
 }

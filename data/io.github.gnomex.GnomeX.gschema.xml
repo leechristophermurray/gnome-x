@@ -137,5 +137,10 @@
       <summary>Auto accent from wallpaper</summary>
       <description>Let the experienced daemon re-extract the accent color when the wallpaper changes</description>
     </key>
+    <key name="tb-floating-dock-enabled" type="b">
+      <default>false</default>
+      <summary>Floating dock</summary>
+      <description>Turn the overview dash into an always-visible floating dock (requires the Dash to Dock extension)</description>
+    </key>
   </schema>
 </schemalist>

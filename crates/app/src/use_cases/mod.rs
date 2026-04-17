@@ -4,11 +4,13 @@
 mod apply_theme;
 mod browse;
 mod customize;
+mod customize_shell;
 mod manage;
 mod packs;
 
 pub use apply_theme::*;
 pub use browse::*;
 pub use customize::*;
+pub use customize_shell::*;
 pub use manage::*;
 pub use packs::*;

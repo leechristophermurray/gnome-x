@@ -7,12 +7,15 @@
 //! the UI layer. It is threaded through component Init params so that
 //! every view can spawn async work on the tokio runtime.
 
+use gnomex_app::ports::{BlurMyShellController, FloatingDockController, ShellCustomizer};
 use gnomex_app::use_cases::{
-    ApplyThemeUseCase, BrowseUseCase, CustomizeUseCase, ManageUseCase, PacksUseCase,
+    ApplyThemeUseCase, BrowseUseCase, CustomizeShellUseCase, CustomizeUseCase, ManageUseCase,
+    PacksUseCase,
 };
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
-    GSettingsAppSettings, GSettingsAppearance, OcsClient, PackTomlStorage, VscodeThemer,
+    GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell, GSettingsFloatingDock,
+    OcsClient, PackTomlStorage, VscodeThemer,
 };
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -26,6 +29,9 @@ pub struct AppServices {
     pub customize: Arc<CustomizeUseCase>,
     pub packs: Arc<PacksUseCase>,
     pub apply_theme: Arc<ApplyThemeUseCase>,
+    pub customize_shell: Arc<CustomizeShellUseCase>,
+    pub floating_dock: Arc<dyn FloatingDockController>,
+    pub blur_my_shell: Arc<dyn BlurMyShellController>,
     pub detected_gnome_version: String,
 }
 
@@ -79,6 +85,23 @@ impl AppServices {
         ));
 
         let app_settings: Arc<GSettingsAppSettings> = Arc::new(GSettingsAppSettings::new());
+        let floating_dock: Arc<dyn FloatingDockController> =
+            Arc::new(GSettingsFloatingDock::new());
+        let blur_my_shell: Arc<dyn BlurMyShellController> =
+            Arc::new(GSettingsBlurMyShell::new());
+
+        let shell_customizer: Arc<dyn ShellCustomizer> =
+            Arc::from(gnomex_infra::shell_customizer::create_shell_customizer(
+                &shell_version,
+                gnomex_infra::shell_customizer::ExtensionControllers {
+                    floating_dock: floating_dock.clone(),
+                    blur_my_shell: blur_my_shell.clone(),
+                },
+            ));
+        let customize_shell = Arc::new(CustomizeShellUseCase::new(
+            shell_customizer.clone(),
+            &shell_version,
+        ));
 
         let packs = Arc::new(PacksUseCase::new(
             pack_storage,
@@ -87,6 +110,7 @@ impl AppServices {
             installer,
             ocs_client,
             app_settings,
+            shell_customizer,
         ));
 
         let apply_theme = Arc::new(
@@ -102,6 +126,9 @@ impl AppServices {
             customize,
             packs,
             apply_theme,
+            customize_shell,
+            floating_dock,
+            blur_my_shell,
             detected_gnome_version,
         }
     }

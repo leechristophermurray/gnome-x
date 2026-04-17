@@ -68,6 +68,29 @@ sudo -u "${TARGET_USER}" systemctl --user enable --now experienced.service 2>/de
     echo "Note: couldn't auto-enable experienced.service — run as ${TARGET_USER}:"
 echo "       systemctl --user enable --now experienced.service"
 
+# GNOME Shell extension (io.github.gnomex@io.github.gnomex) — drives
+# native overview blur + floating dock by listening to our schema.
+EXT_UUID="io.github.gnomex@io.github.gnomex"
+EXT_DIR="${DATADIR}/gnome-shell/extensions/${EXT_UUID}"
+install -d "${EXT_DIR}/lib"
+install -Dm644 "extension/${EXT_UUID}/metadata.json"             "${EXT_DIR}/metadata.json"
+install -Dm644 "extension/${EXT_UUID}/extension.js"              "${EXT_DIR}/extension.js"
+install -Dm644 "extension/${EXT_UUID}/stylesheet.css"            "${EXT_DIR}/stylesheet.css"
+install -Dm644 "extension/${EXT_UUID}/lib/shell_customizer.js"   "${EXT_DIR}/lib/shell_customizer.js"
+install -Dm644 "extension/${EXT_UUID}/lib/floating_dock.js"      "${EXT_DIR}/lib/floating_dock.js"
+install -Dm644 "extension/${EXT_UUID}/lib/gnome45_customizer.js" "${EXT_DIR}/lib/gnome45_customizer.js"
+install -Dm644 "extension/${EXT_UUID}/lib/gnome46_customizer.js" "${EXT_DIR}/lib/gnome46_customizer.js"
+install -Dm644 "extension/${EXT_UUID}/lib/gnome47_customizer.js" "${EXT_DIR}/lib/gnome47_customizer.js"
+install -Dm644 "extension/${EXT_UUID}/lib/gnome50_customizer.js" "${EXT_DIR}/lib/gnome50_customizer.js"
+echo "Installed Shell extension to ${EXT_DIR}"
+
+# Try to enable the extension for the invoking user. Requires a shell
+# reload to pick up the new system-wide extension — we best-effort it.
+sudo -u "${TARGET_USER}" gnome-extensions enable "${EXT_UUID}" 2>/dev/null || \
+    echo "Note: couldn't auto-enable extension — run as ${TARGET_USER}:"
+echo "       gnome-extensions enable ${EXT_UUID}"
+echo "       (and log out + back in if GNOME Shell needs to re-scan extensions)"
+
 # Update caches
 if command -v gtk-update-icon-cache &>/dev/null; then
     gtk-update-icon-cache -f -t "${DATADIR}/icons/hicolor" || true

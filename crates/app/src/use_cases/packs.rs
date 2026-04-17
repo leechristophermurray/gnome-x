@@ -3,7 +3,7 @@
 
 use crate::ports::{
     AppSettings, AppearanceSettings, ContentRepository, LocalInstaller, PackStorage, PackSummary,
-    ShellProxy,
+    ShellCustomizer, ShellProxy,
 };
 use crate::AppError;
 use gnomex_domain::{ExperiencePack, ExtensionRef, ExtensionState, ThemeType};
@@ -17,6 +17,7 @@ pub struct PacksUseCase {
     installer: Arc<dyn LocalInstaller>,
     content_repo: Arc<dyn ContentRepository>,
     app_settings: Arc<dyn AppSettings>,
+    shell_customizer: Arc<dyn ShellCustomizer>,
 }
 
 impl PacksUseCase {
@@ -27,6 +28,7 @@ impl PacksUseCase {
         installer: Arc<dyn LocalInstaller>,
         content_repo: Arc<dyn ContentRepository>,
         app_settings: Arc<dyn AppSettings>,
+        shell_customizer: Arc<dyn ShellCustomizer>,
     ) -> Self {
         Self {
             pack_storage,
@@ -35,6 +37,7 @@ impl PacksUseCase {
             installer,
             content_repo,
             app_settings,
+            shell_customizer,
         }
     }
 
@@ -103,6 +106,18 @@ impl PacksUseCase {
                 Vec::new()
             });
 
+        // Capture every shell tweak the running version can read.
+        // Failures are non-fatal — we'd rather ship a v2 pack missing
+        // some tweaks than reject the whole snapshot.
+        let shell_tweaks = self
+            .shell_customizer
+            .snapshot()
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("snapshot shell tweaks failed: {e}");
+                Vec::new()
+            });
+
         let id = slug(&name);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -116,7 +131,9 @@ impl PacksUseCase {
             author,
             created_at: now,
             shell_version,
-            pack_format: 1,
+            // v2 introduces shell_tweaks. v1 packs still load cleanly;
+            // see ExperiencePack::validate and PackTomlStorage.
+            pack_format: 2,
             gtk_theme: gtk_theme.map(|n| gnomex_domain::ThemeRef {
                 name: n,
                 source: "local".into(),
@@ -144,6 +161,7 @@ impl PacksUseCase {
             extensions: ext_refs,
             wallpaper,
             gsettings_overrides,
+            shell_tweaks,
         };
 
         self.pack_storage.save_pack(&pack)?;
@@ -227,6 +245,16 @@ impl PacksUseCase {
         if !pack.gsettings_overrides.is_empty() {
             if let Err(e) = self.app_settings.apply_overrides(&pack.gsettings_overrides) {
                 tracing::warn!("pack apply: overrides failed: {e}");
+            }
+        }
+
+        // Replay shell tweaks through the version-specific customizer.
+        // Cross-version application degrades gracefully: tweaks that
+        // aren't supported on the target shell are logged and skipped
+        // by the adapter, never surfaced as errors.
+        for tweak in &pack.shell_tweaks {
+            if let Err(e) = self.shell_customizer.apply(tweak).await {
+                tracing::warn!("pack apply: shell tweak {:?} failed: {e}", tweak.id);
             }
         }
 
