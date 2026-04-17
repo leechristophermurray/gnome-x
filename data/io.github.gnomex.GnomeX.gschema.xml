@@ -132,5 +132,10 @@
       <default>0.95</default>
       <summary>Notification banner opacity</summary>
     </key>
+    <key name="use-wallpaper-accent" type="b">
+      <default>false</default>
+      <summary>Auto accent from wallpaper</summary>
+      <description>Let the experienced daemon re-extract the accent color when the wallpaper changes</description>
+    </key>
   </schema>
 </schemalist>

@@ -7,19 +7,22 @@ set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
 DATADIR="${PREFIX}/share"
-BINARY="target/release/gnomex-ui"
+UI_BINARY="target/release/gnomex-ui"
+DAEMON_BINARY="target/release/experienced"
+CLI_BINARY="target/release/experiencectl"
 
-# Build release binary if missing
-if [ ! -f "${BINARY}" ]; then
-    echo "Building release binary..."
-    cargo build --release -p gnomex-ui
+# Build release binaries if missing
+if [ ! -f "${UI_BINARY}" ] || [ ! -f "${DAEMON_BINARY}" ] || [ ! -f "${CLI_BINARY}" ]; then
+    echo "Building release binaries..."
+    cargo build --release -p gnomex-ui -p gnomex-daemon -p gnomex-cli
 fi
 
 echo "Installing GNOME X to ${PREFIX}..."
 
-# Binary
-install -Dm755 "${BINARY}" \
-    "${PREFIX}/bin/gnome-x"
+# Binaries
+install -Dm755 "${UI_BINARY}" "${PREFIX}/bin/gnome-x"
+install -Dm755 "${DAEMON_BINARY}" "${PREFIX}/bin/experienced"
+install -Dm755 "${CLI_BINARY}" "${PREFIX}/bin/experiencectl"
 
 # Desktop file
 install -Dm644 data/io.github.gnomex.GnomeX.desktop.in \
@@ -41,16 +44,26 @@ install -Dm644 data/icons/symbolic/apps/io.github.gnomex.GnomeX-symbolic.svg \
 install -Dm644 data/icons/128x128/apps/io.github.gnomex.GnomeX.png \
     "${DATADIR}/icons/hicolor/128x128/apps/io.github.gnomex.GnomeX.png"
 
-# Systemd user timer for background accent scheduling
-SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
+# Systemd user service for the experienced daemon
+# Install to the invoking user's config dir even when running under sudo
+TARGET_USER="${SUDO_USER:-$(whoami)}"
+TARGET_HOME=$(getent passwd "${TARGET_USER}" | cut -d: -f6)
+SYSTEMD_USER_DIR="${TARGET_HOME}/.config/systemd/user"
 mkdir -p "${SYSTEMD_USER_DIR}"
-install -Dm644 data/systemd/gnome-x-accent-scheduler.service \
-    "${SYSTEMD_USER_DIR}/gnome-x-accent-scheduler.service"
-install -Dm644 data/systemd/gnome-x-accent-scheduler.timer \
-    "${SYSTEMD_USER_DIR}/gnome-x-accent-scheduler.timer"
-systemctl --user daemon-reload || true
-systemctl --user enable --now gnome-x-accent-scheduler.timer || true
-echo "Enabled accent scheduler timer (runs every 5 minutes)"
+install -Dm644 data/systemd/experienced.service \
+    "${SYSTEMD_USER_DIR}/experienced.service"
+chown -R "${TARGET_USER}":"${TARGET_USER}" "${SYSTEMD_USER_DIR}" 2>/dev/null || true
+
+# Remove any older bash-timer-based units
+rm -f "${SYSTEMD_USER_DIR}/gnome-x-accent-scheduler.service" \
+      "${SYSTEMD_USER_DIR}/gnome-x-accent-scheduler.timer" 2>/dev/null || true
+
+# Reload and enable, running as the target user
+sudo -u "${TARGET_USER}" systemctl --user daemon-reload 2>/dev/null || true
+sudo -u "${TARGET_USER}" systemctl --user disable --now gnome-x-accent-scheduler.timer 2>/dev/null || true
+sudo -u "${TARGET_USER}" systemctl --user enable --now experienced.service 2>/dev/null || \
+    echo "Note: couldn't auto-enable experienced.service — run as ${TARGET_USER}:"
+echo "       systemctl --user enable --now experienced.service"
 
 # Update caches
 if command -v gtk-update-icon-cache &>/dev/null; then
@@ -63,4 +76,7 @@ if command -v update-desktop-database &>/dev/null; then
     update-desktop-database "${DATADIR}/applications" || true
 fi
 
-echo "Done. Run 'gnome-x' or find it in the app grid."
+echo ""
+echo "Done. GUI: 'gnome-x' (or find it in the app grid)"
+echo "      CLI: 'experiencectl --help'"
+echo "      Daemon: running as systemd user service 'experienced.service'"

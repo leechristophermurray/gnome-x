@@ -638,7 +638,7 @@ impl SimpleComponent for ThemeBuilderModel {
 
         // === Dash / Overview ===
         let dash_group = adw::PreferencesGroup::builder()
-            .title("Dash & Overview")
+            .title("Dash &amp; Overview")
             .description("Customize the app launcher and activities view")
             .build();
 
@@ -1061,7 +1061,7 @@ impl SimpleComponent for ThemeBuilderModel {
 
         // === Notifications ===
         let notif_group = adw::PreferencesGroup::builder()
-            .title("Notifications & Calendar")
+            .title("Notifications &amp; Calendar")
             .description("Shell notification banner and calendar styling")
             .build();
 
@@ -1095,7 +1095,7 @@ impl SimpleComponent for ThemeBuilderModel {
 
         // === Headerbar & CSD ===
         let csd_group = adw::PreferencesGroup::builder()
-            .title("Headerbar & CSD")
+            .title("Headerbar &amp; CSD")
             .description("Client-side decoration and titlebar styling")
             .build();
 
@@ -1155,7 +1155,7 @@ impl SimpleComponent for ThemeBuilderModel {
 
         // === Visual Insets & Borders ===
         let inset_group = adw::PreferencesGroup::builder()
-            .title("Visual Insets & Borders")
+            .title("Visual Insets &amp; Borders")
             .description("Fine-tune borders, shadows, and focus indicators")
             .build();
 
@@ -1806,15 +1806,18 @@ impl SimpleComponent for ThemeBuilderModel {
 
                 // Accent color scheduling
                 if self.scheduled_accent_enabled {
-                    let target = if is_night {
+                    let raw = if is_night {
                         &self.night_accent
                     } else {
                         &self.day_accent
                     };
+                    // `accent-color` is an enum — snap any custom hex to the
+                    // nearest named GNOME accent before writing.
+                    let target = color_picker::nearest_accent_id(raw);
                     let iface = gio::Settings::new("org.gnome.desktop.interface");
                     let current = iface.string("accent-color").to_string();
-                    if current != *target {
-                        let _ = iface.set_string("accent-color", target);
+                    if current != target {
+                        let _ = iface.set_string("accent-color", &target);
                         tracing::info!(
                             "scheduled accent: {current} \u{2192} {target} ({})",
                             if is_night { "night" } else { "day" }

@@ -1,0 +1,24 @@
+[package]
+name = "gnomex-daemon"
+description = "GNOME X background daemon — experienced"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "experienced"
+path = "src/main.rs"
+
+[dependencies]
+gnomex-domain = { workspace = true }
+gnomex-app = { workspace = true }
+gnomex-infra = { workspace = true }
+
+gio = { workspace = true }
+glib = { workspace = true }
+gdk-pixbuf = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

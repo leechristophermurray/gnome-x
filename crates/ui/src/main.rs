@@ -62,4 +62,10 @@ fn main() {
 
     let app = relm4::RelmApp::from_app(app);
     app.run::<AppModel>(services);
+
+    // The glib main loop has exited. Force an immediate tokio shutdown
+    // so background tasks (HTTP clients, D-Bus connections) don't keep
+    // the process alive as an orphan.
+    runtime.shutdown_timeout(std::time::Duration::from_millis(100));
+    std::process::exit(0);
 }

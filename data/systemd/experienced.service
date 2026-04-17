@@ -1,0 +1,14 @@
+[Unit]
+Description=GNOME X Experience Daemon
+Documentation=https://github.com/gnomex/gnome-x
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/experienced
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

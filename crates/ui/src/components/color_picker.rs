@@ -208,3 +208,45 @@ pub fn hex_to_accent_id(hex: &str) -> String {
         .map(|(id, _, _)| id.to_string())
         .unwrap_or_else(|| hex.to_owned())
 }
+
+/// Map an arbitrary hex color (or an accent id) to the closest GNOME
+/// accent id. The `org.gnome.desktop.interface.accent-color` key is an
+/// enum — it rejects raw hex values — so any custom color chosen by the
+/// user must be snapped to one of the nine named accents before writing.
+pub fn nearest_accent_id(value: &str) -> String {
+    // Already a valid accent id? Return it unchanged.
+    if GNOME_COLORS.iter().any(|(id, _, _)| *id == value) {
+        return value.to_owned();
+    }
+
+    let Some(target) = parse_hex(value) else {
+        return "blue".to_owned();
+    };
+
+    let mut best = "blue";
+    let mut best_dist = u32::MAX;
+    for &(id, _, hex) in GNOME_COLORS {
+        if let Some(rgb) = parse_hex(hex) {
+            let dr = target.0 as i32 - rgb.0 as i32;
+            let dg = target.1 as i32 - rgb.1 as i32;
+            let db = target.2 as i32 - rgb.2 as i32;
+            let dist = (dr * dr + dg * dg + db * db) as u32;
+            if dist < best_dist {
+                best_dist = dist;
+                best = id;
+            }
+        }
+    }
+    best.to_owned()
+}
+
+fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
+    let s = s.trim_start_matches('#');
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some((r, g, b))
+}
