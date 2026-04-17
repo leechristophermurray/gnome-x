@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ports::{
-    AppearanceSettings, ContentRepository, LocalInstaller, PackStorage, PackSummary, ShellProxy,
+    AppSettings, AppearanceSettings, ContentRepository, LocalInstaller, PackStorage, PackSummary,
+    ShellProxy,
 };
 use crate::AppError;
 use gnomex_domain::{ExperiencePack, ExtensionRef, ExtensionState, ThemeType};
@@ -15,6 +16,7 @@ pub struct PacksUseCase {
     shell: Arc<dyn ShellProxy>,
     installer: Arc<dyn LocalInstaller>,
     content_repo: Arc<dyn ContentRepository>,
+    app_settings: Arc<dyn AppSettings>,
 }
 
 impl PacksUseCase {
@@ -24,6 +26,7 @@ impl PacksUseCase {
         shell: Arc<dyn ShellProxy>,
         installer: Arc<dyn LocalInstaller>,
         content_repo: Arc<dyn ContentRepository>,
+        app_settings: Arc<dyn AppSettings>,
     ) -> Self {
         Self {
             pack_storage,
@@ -31,6 +34,7 @@ impl PacksUseCase {
             shell,
             installer,
             content_repo,
+            app_settings,
         }
     }
 
@@ -88,6 +92,17 @@ impl PacksUseCase {
             })
             .collect();
 
+        // Capture the theme-builder knobs + accent-scheduling + cross-cutting
+        // toggles as GSettings overrides. Unknown keys are skipped inside the
+        // adapter, so older schemas still produce a valid pack.
+        let gsettings_overrides = self
+            .app_settings
+            .snapshot_pack_settings()
+            .unwrap_or_else(|e| {
+                tracing::warn!("snapshot pack settings failed: {e}");
+                Vec::new()
+            });
+
         let id = slug(&name);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -128,7 +143,7 @@ impl PacksUseCase {
             }),
             extensions: ext_refs,
             wallpaper,
-            gsettings_overrides: vec![],
+            gsettings_overrides,
         };
 
         self.pack_storage.save_pack(&pack)?;
@@ -202,6 +217,16 @@ impl PacksUseCase {
                 if let Ok(uuid) = gnomex_domain::ExtensionUuid::new(&ext.uuid) {
                     self.shell.enable_extension(&uuid).await.ok();
                 }
+            }
+        }
+
+        // Restore the captured theme-builder knobs + accent scheduling.
+        // Callers should trigger a theme re-render after this to rebuild the
+        // CSS from the newly-applied `tb-*` values (the GUI's pack-apply
+        // handler / `experiencectl pack apply` both do this).
+        if !pack.gsettings_overrides.is_empty() {
+            if let Err(e) = self.app_settings.apply_overrides(&pack.gsettings_overrides) {
+                tracing::warn!("pack apply: overrides failed: {e}");
             }
         }
 

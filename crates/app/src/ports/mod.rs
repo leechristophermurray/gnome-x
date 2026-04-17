@@ -6,6 +6,7 @@
 //! These traits define what the application layer *needs* from the outside
 //! world. Concrete implementations live in `gnomex-infra` (Red layer).
 
+mod app_settings;
 mod appearance_settings;
 mod content_repository;
 mod external_app_themer;
@@ -16,6 +17,7 @@ mod shell_proxy;
 mod theme_css;
 mod theme_writer;
 
+pub use app_settings::*;
 pub use appearance_settings::*;
 pub use content_repository::*;
 pub use external_app_themer::*;

@@ -12,7 +12,7 @@ use gnomex_app::use_cases::{
 };
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
-    GSettingsAppearance, OcsClient, PackTomlStorage, VscodeThemer,
+    GSettingsAppSettings, GSettingsAppearance, OcsClient, PackTomlStorage, VscodeThemer,
 };
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -78,12 +78,15 @@ impl AppServices {
             appearance.clone(),
         ));
 
+        let app_settings: Arc<GSettingsAppSettings> = Arc::new(GSettingsAppSettings::new());
+
         let packs = Arc::new(PacksUseCase::new(
             pack_storage,
             appearance.clone(),
             shell_proxy,
             installer,
             ocs_client,
+            app_settings,
         ));
 
         let apply_theme = Arc::new(

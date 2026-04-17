@@ -18,7 +18,7 @@ use gnomex_domain::{
 };
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
-    GSettingsAppearance, OcsClient, PackTomlStorage, VscodeThemer,
+    GSettingsAppSettings, GSettingsAppearance, OcsClient, PackTomlStorage, VscodeThemer,
 };
 use std::sync::Arc;
 
@@ -155,7 +155,12 @@ fn handle_pack(action: PackAction) -> Result<()> {
             runtime
                 .block_on(packs_uc.apply_pack(&id))
                 .context("failed to apply pack")?;
-            println!("Pack '{id}' applied.");
+            // Regenerate the theme CSS so the just-restored tb-* values
+            // take visual effect immediately.
+            let apply_uc = build_apply_theme_use_case()?;
+            let spec = build_spec_from_gsettings()?;
+            apply_uc.apply(&spec).context("post-pack theme apply failed")?;
+            println!("Pack '{id}' applied (theme re-rendered).");
         }
     }
     Ok(())
@@ -244,6 +249,7 @@ fn build_packs_use_case(handle: tokio::runtime::Handle) -> Result<PacksUseCase> 
     let installer: Arc<FilesystemInstaller> = Arc::new(FilesystemInstaller::new());
     let appearance: Arc<GSettingsAppearance> = Arc::new(GSettingsAppearance::new());
     let pack_storage: Arc<PackTomlStorage> = Arc::new(PackTomlStorage::new());
+    let app_settings: Arc<GSettingsAppSettings> = Arc::new(GSettingsAppSettings::new());
     let shell_proxy: Arc<DbusShellProxy> = Arc::new(
         handle
             .block_on(DbusShellProxy::new())
@@ -256,6 +262,7 @@ fn build_packs_use_case(handle: tokio::runtime::Handle) -> Result<PacksUseCase> 
         shell_proxy,
         installer,
         ocs_client,
+        app_settings,
     ))
 }
 
