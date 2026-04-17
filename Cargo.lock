@@ -1058,6 +1058,7 @@ dependencies = [
  "async-trait",
  "gnomex-domain",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

@@ -7,6 +7,7 @@
 //! `gnomex-app`. Contains HTTP clients, D-Bus proxy, filesystem installer,
 //! TOML pack storage, and GSettings adapter.
 
+mod chromium_themer;
 mod dbus_shell_proxy;
 mod ego_client;
 mod filesystem_installer;
@@ -15,7 +16,9 @@ mod ocs_client;
 mod pack_toml_storage;
 pub mod theme_css;
 mod theme_writer;
+mod vscode_themer;
 
+pub use chromium_themer::ChromiumThemer;
 pub use dbus_shell_proxy::DbusShellProxy;
 pub use ego_client::EgoClient;
 pub use filesystem_installer::FilesystemInstaller;
@@ -23,3 +26,4 @@ pub use gsettings_appearance::GSettingsAppearance;
 pub use ocs_client::OcsClient;
 pub use pack_toml_storage::PackTomlStorage;
 pub use theme_writer::FilesystemThemeWriter;
+pub use vscode_themer::VscodeThemer;

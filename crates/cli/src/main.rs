@@ -17,8 +17,8 @@ use gnomex_domain::{
     PanelSpec, Radius, StatusColorSpec, ThemeSpec, TintSpec, WindowFrameSpec,
 };
 use gnomex_infra::{
-    DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter, GSettingsAppearance,
-    OcsClient, PackTomlStorage,
+    ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
+    GSettingsAppearance, OcsClient, PackTomlStorage, VscodeThemer,
 };
 use std::sync::Arc;
 
@@ -233,7 +233,9 @@ fn build_apply_theme_use_case() -> Result<ApplyThemeUseCase> {
         Arc::from(gnomex_infra::theme_css::create_css_generator(&shell_version));
     let writer: Arc<FilesystemThemeWriter> = Arc::new(FilesystemThemeWriter::new());
     let appearance: Arc<GSettingsAppearance> = Arc::new(GSettingsAppearance::new());
-    Ok(ApplyThemeUseCase::new(generator, writer, appearance))
+    Ok(ApplyThemeUseCase::new(generator, writer, appearance)
+        .with_external_themer(Arc::new(VscodeThemer::new()))
+        .with_external_themer(Arc::new(ChromiumThemer::new())))
 }
 
 fn build_packs_use_case(handle: tokio::runtime::Handle) -> Result<PacksUseCase> {

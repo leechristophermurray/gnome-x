@@ -10,17 +10,22 @@
 //!    schedule. Replaces the bash-based systemd oneshot that polled every 5 min.
 //! 2. **Wallpaper reactivity** — on `picture-uri` change, re-extract dominant
 //!    color and update accent (Material You auto-mode).
-//! 3. **Color-scheme reactivity** — on dark/light flip, log for diagnostic use;
-//!    future hook for re-applying panel tint automatically.
+//! 3. **Color-scheme reactivity** — on dark/light flip, re-apply external-app
+//!    theming so Chromium and VS Code-family editors follow along.
+//! 4. **External app theming** — propagate accent + panel-tint + color-scheme
+//!    to Chromium-family browsers and VS Code-family editors via the
+//!    `ExternalAppThemer` port.
 //!
-//! Architecture: no new ports, no new use cases. Pure composition of existing
-//! domain+app+infra crates.
+//! Architecture: pure composition of existing domain+app+infra crates.
 
 use anyhow::{Context, Result};
 use gdk_pixbuf::Pixbuf;
 use gio::prelude::*;
-use gnomex_domain::{color, HexColor};
+use gnomex_app::ports::ExternalAppThemer;
+use gnomex_domain::{color, ColorScheme, ExternalThemeSpec, HexColor};
+use gnomex_infra::{ChromiumThemer, VscodeThemer};
 use std::rc::Rc;
+use std::sync::Arc;
 
 const APP_SCHEMA: &str = "io.github.gnomex.GnomeX";
 const IFACE_SCHEMA: &str = "org.gnome.desktop.interface";
@@ -58,13 +63,23 @@ fn main() -> Result<()> {
 
     let app_settings = Rc::new(gio::Settings::new(APP_SCHEMA));
 
+    // External-app themers (Chromium browsers, VS Code-family editors).
+    // Constructed once; passed by Rc into signal handlers.
+    let external_themers: Rc<Vec<Arc<dyn ExternalAppThemer>>> = Rc::new(vec![
+        Arc::new(VscodeThemer::new()),
+        Arc::new(ChromiumThemer::new()),
+    ]);
+
     // Apply the correct accent for the current time on startup.
     apply_scheduled_accent(&app_settings);
+    // Propagate the current appearance to external apps on startup.
+    apply_external_theme(&external_themers);
 
     // === GSettings watchers ===
-    setup_accent_schedule_watcher(app_settings.clone());
+    setup_accent_schedule_watcher(app_settings.clone(), external_themers.clone());
     setup_wallpaper_watcher();
-    setup_color_scheme_watcher();
+    setup_color_scheme_watcher(external_themers.clone());
+    setup_external_theme_watcher(app_settings.clone(), external_themers.clone());
 
     // === Periodic tick (1 min) ===
     // A fallback ticker in case the daemon misses a schedule-change signal.
@@ -86,20 +101,27 @@ fn main() -> Result<()> {
 
 /// Watch the Night Light schedule and our own scheduled-accent toggle.
 /// When either changes, immediately re-evaluate the accent.
-fn setup_accent_schedule_watcher(app_settings: Rc<gio::Settings>) {
+fn setup_accent_schedule_watcher(
+    app_settings: Rc<gio::Settings>,
+    themers: Rc<Vec<Arc<dyn ExternalAppThemer>>>,
+) {
     // Our own key
     {
         let app_settings = app_settings.clone();
+        let themers = themers.clone();
         app_settings.clone().connect_changed(Some("scheduled-accent-enabled"), move |_, _| {
             tracing::debug!("scheduled-accent-enabled changed");
             apply_scheduled_accent(&app_settings);
+            apply_external_theme(&themers);
         });
     }
     for key in ["day-accent-color", "night-accent-color"] {
         let app_settings = app_settings.clone();
+        let themers = themers.clone();
         app_settings.clone().connect_changed(Some(key), move |_, _| {
             tracing::debug!("{key} changed");
             apply_scheduled_accent(&app_settings);
+            apply_external_theme(&themers);
         });
     }
 
@@ -111,10 +133,12 @@ fn setup_accent_schedule_watcher(app_settings: Rc<gio::Settings>) {
         "night-light-schedule-automatic",
     ] {
         let app_settings = app_settings.clone();
+        let themers = themers.clone();
         let nl_settings_inner = nl_settings.clone();
         nl_settings.clone().connect_changed(Some(key), move |_, _| {
             tracing::debug!("night-light key '{key}' changed");
             apply_scheduled_accent(&app_settings);
+            apply_external_theme(&themers);
             let _ = nl_settings_inner; // keep reference alive
         });
     }
@@ -158,15 +182,80 @@ fn setup_wallpaper_watcher() {
     });
 }
 
-/// Watch dark/light color scheme changes. Currently just logs — future hook
-/// for re-applying panel tint or shell CSS when the user flips the mode.
-fn setup_color_scheme_watcher() {
+/// Watch dark/light color scheme changes and re-apply external-app theming
+/// so Chromium/VS Code follow the mode switch.
+fn setup_color_scheme_watcher(themers: Rc<Vec<Arc<dyn ExternalAppThemer>>>) {
     let iface = Rc::new(gio::Settings::new(IFACE_SCHEMA));
     iface.clone().connect_changed(Some("color-scheme"), move |s, _| {
         let scheme = s.string("color-scheme");
         tracing::info!("color-scheme changed to: {scheme}");
-        // Future: regenerate panel tint CSS or flip shell theme variant.
+        apply_external_theme(&themers);
     });
+}
+
+/// Watch the GNOME accent color and our panel tint, re-propagating to
+/// external apps whenever either changes. This catches both manual accent
+/// picks in Settings and our own scheduled/wallpaper-driven accent writes.
+fn setup_external_theme_watcher(
+    app_settings: Rc<gio::Settings>,
+    themers: Rc<Vec<Arc<dyn ExternalAppThemer>>>,
+) {
+    // GNOME accent-color (enum).
+    {
+        let iface = Rc::new(gio::Settings::new(IFACE_SCHEMA));
+        let themers = themers.clone();
+        iface.clone().connect_changed(Some("accent-color"), move |_, _| {
+            tracing::debug!("accent-color changed — re-applying external themes");
+            apply_external_theme(&themers);
+        });
+    }
+    // Our panel tint hex.
+    {
+        let themers = themers.clone();
+        app_settings.clone().connect_changed(Some("tb-panel-tint"), move |_, _| {
+            tracing::debug!("tb-panel-tint changed — re-applying external themes");
+            apply_external_theme(&themers);
+        });
+    }
+}
+
+/// Read the current accent + panel tint + color-scheme from GSettings and
+/// fan out to every external-app themer. No-op on bad data (invalid hex,
+/// unknown accent id).
+fn apply_external_theme(themers: &[Arc<dyn ExternalAppThemer>]) {
+    let iface = gio::Settings::new(IFACE_SCHEMA);
+    let app = gio::Settings::new(APP_SCHEMA);
+
+    let accent_name = iface.string("accent-color").to_string();
+    let accent_hex = ACCENT_COLORS
+        .iter()
+        .find(|(id, _)| *id == accent_name)
+        .map(|(_, hex)| *hex)
+        .unwrap_or("#3584e4");
+
+    let panel_tint = app.string("tb-panel-tint").to_string();
+    let color_scheme = ColorScheme::from_gsettings(&iface.string("color-scheme"));
+
+    let Ok(accent) = HexColor::new(accent_hex) else {
+        tracing::warn!("external theming: invalid accent hex {accent_hex}");
+        return;
+    };
+    let Ok(panel) = HexColor::new(&panel_tint) else {
+        tracing::warn!("external theming: invalid panel tint {panel_tint}");
+        return;
+    };
+
+    let spec = ExternalThemeSpec {
+        accent,
+        panel_tint: panel,
+        color_scheme,
+    };
+
+    for t in themers {
+        if let Err(e) = t.apply(&spec) {
+            tracing::warn!("external themer '{}' failed: {e}", t.name());
+        }
+    }
 }
 
 /// Core scheduled-accent logic. Reads the Night Light schedule times and

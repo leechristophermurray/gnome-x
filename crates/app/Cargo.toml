@@ -11,3 +11,4 @@ authors.workspace = true
 gnomex-domain = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }

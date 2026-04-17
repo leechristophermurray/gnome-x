@@ -11,8 +11,8 @@ use gnomex_app::use_cases::{
     ApplyThemeUseCase, BrowseUseCase, CustomizeUseCase, ManageUseCase, PacksUseCase,
 };
 use gnomex_infra::{
-    DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter, GSettingsAppearance,
-    OcsClient, PackTomlStorage,
+    ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
+    GSettingsAppearance, OcsClient, PackTomlStorage, VscodeThemer,
 };
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -86,11 +86,11 @@ impl AppServices {
             ocs_client,
         ));
 
-        let apply_theme = Arc::new(ApplyThemeUseCase::new(
-            css_generator,
-            theme_writer,
-            appearance,
-        ));
+        let apply_theme = Arc::new(
+            ApplyThemeUseCase::new(css_generator, theme_writer, appearance)
+                .with_external_themer(Arc::new(VscodeThemer::new()))
+                .with_external_themer(Arc::new(ChromiumThemer::new())),
+        );
 
         Self {
             handle,

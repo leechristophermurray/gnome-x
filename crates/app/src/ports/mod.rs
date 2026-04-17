@@ -8,6 +8,7 @@
 
 mod appearance_settings;
 mod content_repository;
+mod external_app_themer;
 mod extension_repository;
 mod local_installer;
 mod pack_storage;
@@ -17,6 +18,7 @@ mod theme_writer;
 
 pub use appearance_settings::*;
 pub use content_repository::*;
+pub use external_app_themer::*;
 pub use extension_repository::*;
 pub use local_installer::*;
 pub use pack_storage::*;
