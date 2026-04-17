@@ -45,7 +45,7 @@
   </recommends>
 
   <releases>
-    <release version="0.1.0" date="2026-04-13">
+    <release version="0.2.0" date="2026-04-13">
       <description>
         <p>Initial release — Phase 1 MVP</p>
         <ul>

@@ -6,6 +6,128 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[[bin]]
+name = "gnome-x"
+path = "src/main.rs"
+
+# --- Debian packaging (cargo-deb) -------------------------------------------
+# Run `cargo build --release --workspace` first, then:
+#   cargo deb --package gnomex-ui --no-build
+[package.metadata.deb]
+name = "gnome-x"
+maintainer = "GNOME X Contributors <noreply@anthropic.com>"
+section = "x11"
+priority = "optional"
+depends = "libgtk-4-1 (>= 4.12), libadwaita-1-0 (>= 1.4), libglib2.0-bin, dconf-gsettings-backend"
+recommends = "gnome-shell-extension-user-theme"
+extended-description = """\
+GNOME X is a unified customization hub for GNOME Shell — browse and \
+install extensions, apply themes, build custom Libadwaita/Shell CSS, \
+and share complete desktop configurations as Experience Packs.
+"""
+assets = [
+    ["../../target/release/gnome-x",       "usr/bin/",                                                             "755"],
+    ["../../target/release/experienced",   "usr/bin/",                                                             "755"],
+    ["../../target/release/experiencectl", "usr/bin/",                                                             "755"],
+    ["../../data/io.github.gnomex.GnomeX.desktop.in",           "usr/share/applications/io.github.gnomex.GnomeX.desktop",                 "644"],
+    ["../../data/io.github.gnomex.GnomeX.metainfo.xml.in",      "usr/share/metainfo/io.github.gnomex.GnomeX.metainfo.xml",                "644"],
+    ["../../data/io.github.gnomex.GnomeX.gschema.xml",          "usr/share/glib-2.0/schemas/io.github.gnomex.GnomeX.gschema.xml",         "644"],
+    ["../../data/icons/scalable/apps/io.github.gnomex.GnomeX.svg",           "usr/share/icons/hicolor/scalable/apps/io.github.gnomex.GnomeX.svg",          "644"],
+    ["../../data/icons/128x128/apps/io.github.gnomex.GnomeX.png",            "usr/share/icons/hicolor/128x128/apps/io.github.gnomex.GnomeX.png",           "644"],
+    ["../../data/icons/symbolic/apps/io.github.gnomex.GnomeX-symbolic.svg",  "usr/share/icons/hicolor/symbolic/apps/io.github.gnomex.GnomeX-symbolic.svg", "644"],
+    ["../../data/systemd/experienced.service",   "usr/lib/systemd/user/experienced.service",          "644"],
+    ["../../data/systemd/50-gnome-x.preset",     "usr/lib/systemd/user-preset/50-gnome-x.preset",     "644"],
+    ["../../LICENSE",  "usr/share/doc/gnome-x/copyright",  "644"],
+    ["../../README.md", "usr/share/doc/gnome-x/README.md", "644"],
+]
+maintainer-scripts = "../../data/debian"
+
+# --- RPM packaging (cargo-generate-rpm) -------------------------------------
+# Run `cargo build --release --workspace` first, then:
+#   cargo generate-rpm --package gnomex-ui
+[package.metadata.generate-rpm]
+name = "gnome-x"
+summary = "Unified GNOME customization hub"
+license = "Apache-2.0"
+requires = { "gtk4" = "*", "libadwaita" = "*", "glib2" = "*", "dconf" = "*" }
+recommends = { "gnome-shell-extension-user-theme" = "*" }
+post_install_script = """
+glib-compile-schemas /usr/share/glib-2.0/schemas/ >/dev/null 2>&1 || :
+gtk-update-icon-cache -f -t /usr/share/icons/hicolor/ >/dev/null 2>&1 || :
+update-desktop-database -q /usr/share/applications/ >/dev/null 2>&1 || :
+systemctl --global preset experienced.service >/dev/null 2>&1 || :
+"""
+post_uninstall_script = """
+glib-compile-schemas /usr/share/glib-2.0/schemas/ >/dev/null 2>&1 || :
+gtk-update-icon-cache -f -t /usr/share/icons/hicolor/ >/dev/null 2>&1 || :
+update-desktop-database -q /usr/share/applications/ >/dev/null 2>&1 || :
+"""
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../target/release/gnome-x"
+dest = "/usr/bin/gnome-x"
+mode = "755"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../target/release/experienced"
+dest = "/usr/bin/experienced"
+mode = "755"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../target/release/experiencectl"
+dest = "/usr/bin/experiencectl"
+mode = "755"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../data/io.github.gnomex.GnomeX.desktop.in"
+dest = "/usr/share/applications/io.github.gnomex.GnomeX.desktop"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../data/io.github.gnomex.GnomeX.metainfo.xml.in"
+dest = "/usr/share/metainfo/io.github.gnomex.GnomeX.metainfo.xml"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../data/io.github.gnomex.GnomeX.gschema.xml"
+dest = "/usr/share/glib-2.0/schemas/io.github.gnomex.GnomeX.gschema.xml"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../data/icons/scalable/apps/io.github.gnomex.GnomeX.svg"
+dest = "/usr/share/icons/hicolor/scalable/apps/io.github.gnomex.GnomeX.svg"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../data/icons/128x128/apps/io.github.gnomex.GnomeX.png"
+dest = "/usr/share/icons/hicolor/128x128/apps/io.github.gnomex.GnomeX.png"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../data/icons/symbolic/apps/io.github.gnomex.GnomeX-symbolic.svg"
+dest = "/usr/share/icons/hicolor/symbolic/apps/io.github.gnomex.GnomeX-symbolic.svg"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../data/systemd/experienced.service"
+dest = "/usr/lib/systemd/user/experienced.service"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../data/systemd/50-gnome-x.preset"
+dest = "/usr/lib/systemd/user-preset/50-gnome-x.preset"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../LICENSE"
+dest = "/usr/share/licenses/gnome-x/LICENSE"
+mode = "644"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../../README.md"
+dest = "/usr/share/doc/gnome-x/README.md"
+mode = "644"
+
 # Yellow layer (L=2): UI adapters — depends on domain, app, and infra (for composition root)
 [dependencies]
 gnomex-domain = { workspace = true }

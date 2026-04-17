@@ -1,0 +1,29 @@
+#!/bin/sh
+# Post-install script for the gnome-x Debian package.
+# Compiles the GSettings schema, refreshes caches, and applies the
+# systemd user preset so experienced.service starts for each user.
+
+set -e
+
+# GSettings schema
+if command -v glib-compile-schemas >/dev/null 2>&1; then
+    glib-compile-schemas /usr/share/glib-2.0/schemas/ || true
+fi
+
+# Icon cache
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t /usr/share/icons/hicolor/ || true
+fi
+
+# Desktop database
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications/ || true
+fi
+
+# Apply the user-preset so experienced.service auto-enables per user.
+# (Users can opt out with `systemctl --user mask experienced.service`.)
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --global preset experienced.service 2>/dev/null || true
+fi
+
+exit 0

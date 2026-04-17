@@ -6,7 +6,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/experienced
+ExecStart=/usr/bin/experienced
 Restart=on-failure
 RestartSec=5
 

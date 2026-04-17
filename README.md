@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/gnomex/gnome-x/actions"><img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"></a>
-  <a href="https://github.com/gnomex/gnome-x/releases"><img src="https://img.shields.io/badge/version-0.1.0-orange" alt="Version"></a>
+  <a href="https://github.com/gnomex/gnome-x/releases"><img src="https://img.shields.io/badge/version-0.2.0-orange" alt="Version"></a>
   <a href="https://gnome.pages.gitlab.gnome.org/libadwaita/"><img src="https://img.shields.io/badge/toolkit-GTK4%20%2B%20Libadwaita-4a86cf" alt="GTK4 + Libadwaita"></a>
 </p>
 

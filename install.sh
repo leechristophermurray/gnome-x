@@ -7,7 +7,7 @@ set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
 DATADIR="${PREFIX}/share"
-UI_BINARY="target/release/gnomex-ui"
+UI_BINARY="target/release/gnome-x"
 DAEMON_BINARY="target/release/experienced"
 CLI_BINARY="target/release/experiencectl"
 
@@ -50,8 +50,11 @@ TARGET_USER="${SUDO_USER:-$(whoami)}"
 TARGET_HOME=$(getent passwd "${TARGET_USER}" | cut -d: -f6)
 SYSTEMD_USER_DIR="${TARGET_HOME}/.config/systemd/user"
 mkdir -p "${SYSTEMD_USER_DIR}"
-install -Dm644 data/systemd/experienced.service \
-    "${SYSTEMD_USER_DIR}/experienced.service"
+# Service ships with /usr/bin/experienced (the packaged path); when doing
+# a local install under /usr/local, rewrite the path on the fly.
+sed "s#/usr/bin/experienced#${PREFIX}/bin/experienced#" data/systemd/experienced.service \
+    > "${SYSTEMD_USER_DIR}/experienced.service"
+chmod 644 "${SYSTEMD_USER_DIR}/experienced.service"
 chown -R "${TARGET_USER}":"${TARGET_USER}" "${SYSTEMD_USER_DIR}" 2>/dev/null || true
 
 # Remove any older bash-timer-based units

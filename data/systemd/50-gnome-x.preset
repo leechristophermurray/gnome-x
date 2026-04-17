@@ -1,0 +1,3 @@
+# Enable experienced.service for every user by default.
+# Users can still disable with `systemctl --user disable experienced.service`.
+enable experienced.service
