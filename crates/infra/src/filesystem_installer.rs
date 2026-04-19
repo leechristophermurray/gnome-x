@@ -1,6 +1,7 @@
 // Copyright 2026 GNOME X Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::theme_paths::{list_all, ResourcePaths};
 use gnomex_app::ports::LocalInstaller;
 use gnomex_app::AppError;
 use gnomex_domain::{ExtensionUuid, ThemeType};
@@ -9,13 +10,18 @@ use std::path::{Path, PathBuf};
 
 /// Concrete adapter: install/uninstall content to the local filesystem.
 ///
-/// Respects XDG directories:
-/// - Extensions: `~/.local/share/gnome-shell/extensions/<uuid>/`
-/// - Themes: `~/.local/share/themes/<name>/`
-/// - Icons/Cursors: `~/.local/share/icons/<name>/`
+/// Install targets (always user-writable):
+/// - Extensions: `$XDG_DATA_HOME/gnome-shell/extensions/<uuid>/`
+/// - Themes: `$XDG_DATA_HOME/themes/<name>/`
+/// - Icons/Cursors: `$XDG_DATA_HOME/icons/<name>/`
+///
+/// List operations walk every path that GNOME searches, not just the
+/// install target — themes under `~/.themes` (legacy), system themes
+/// under `/usr/share/themes`, and all `$XDG_DATA_DIRS` entries. See
+/// [`theme_paths`](crate::theme_paths) for the full resolution model.
 pub struct FilesystemInstaller {
     data_dir: PathBuf,
-    home_dir: PathBuf,
+    paths: ResourcePaths,
 }
 
 impl FilesystemInstaller {
@@ -27,11 +33,10 @@ impl FilesystemInstaller {
                 PathBuf::from(home).join(".local/share")
             });
 
-        let home_dir = directories::BaseDirs::new()
-            .map(|d| d.home_dir().to_owned())
-            .unwrap_or_else(|| PathBuf::from("/tmp"));
-
-        Self { data_dir, home_dir }
+        Self {
+            data_dir,
+            paths: ResourcePaths::from_env(),
+        }
     }
 
     fn extensions_dir(&self) -> PathBuf {
@@ -134,54 +139,27 @@ impl LocalInstaller for FilesystemInstaller {
     }
 
     fn list_installed_themes(&self) -> Result<Vec<String>, AppError> {
-        let mut themes = Self::list_subdirs(&self.themes_dir())?;
-        // Legacy user dir
-        let legacy = self.home_dir.join(".themes");
-        if legacy.exists() {
-            themes.extend(Self::list_subdirs(&legacy)?);
-        }
-        // System themes
-        let system = std::path::Path::new("/usr/share/themes");
-        if system.exists() {
-            themes.extend(Self::list_subdirs(system)?);
-        }
-        themes.sort();
-        themes.dedup();
-        Ok(themes)
+        // Walks XDG_DATA_HOME + ~/.themes + every XDG_DATA_DIRS entry.
+        Ok(list_all(&self.paths.themes()))
     }
 
     fn list_installed_icons(&self) -> Result<Vec<String>, AppError> {
-        let mut icons = Self::list_subdirs(&self.icons_dir())?;
-        let legacy = self.home_dir.join(".icons");
-        if legacy.exists() {
-            icons.extend(Self::list_subdirs(&legacy)?);
-        }
-        // System icons
-        let system = std::path::Path::new("/usr/share/icons");
-        if system.exists() {
-            icons.extend(Self::list_subdirs(system)?);
-        }
-        icons.sort();
-        icons.dedup();
-        Ok(icons)
+        Ok(list_all(&self.paths.icons()))
     }
 
     fn list_installed_cursors(&self) -> Result<Vec<String>, AppError> {
-        let all_icon_dirs = [
-            self.icons_dir(),
-            self.home_dir.join(".icons"),
-            std::path::PathBuf::from("/usr/share/icons"),
-        ];
-        let mut cursors = Vec::new();
-        for dir in &all_icon_dirs {
-            if let Ok(names) = Self::list_subdirs(dir) {
-                for name in names {
-                    if dir.join(&name).join("cursors").is_dir() {
-                        cursors.push(name);
-                    }
-                }
-            }
-        }
+        // Cursors live inside icon-theme dirs but only count when the
+        // theme has a `cursors/` subdir — otherwise it's just icons.
+        let mut cursors: Vec<String> = self
+            .paths
+            .cursors()
+            .iter()
+            .flat_map(|sp| {
+                crate::theme_paths::list_subdirs(&sp.path)
+                    .into_iter()
+                    .filter(move |name| sp.path.join(name).join("cursors").is_dir())
+            })
+            .collect();
         cursors.sort();
         cursors.dedup();
         Ok(cursors)

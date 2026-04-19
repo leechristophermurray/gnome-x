@@ -19,6 +19,7 @@ mod ocs_client;
 mod pack_toml_storage;
 pub mod shell_customizer;
 pub mod theme_css;
+pub mod theme_paths;
 mod theme_writer;
 mod vscode_themer;
 
