@@ -20,8 +20,8 @@
 use crate::ports::{
     AppSettings, AppearanceSettings, BlurMyShellController, ContentRepository,
     ExternalAppThemer, ExtensionRepository, FloatingDockController, LocalInstaller,
-    PackStorage, PackSummary, ShellCustomizer, ShellProxy, ThemeCss, ThemeCssGenerator,
-    ThemeWriter,
+    PackStorage, PackSummary, ResourceKind, ShadowedResource, ShellCustomizer, ShellProxy,
+    ThemeCss, ThemeCssGenerator, ThemeWriter,
 };
 use crate::AppError;
 use async_trait::async_trait;
@@ -403,6 +403,7 @@ pub struct MockInstaller {
     pub icons: Mutex<Vec<String>>,
     pub cursors: Mutex<Vec<String>>,
     pub installed_extensions: Mutex<Vec<String>>,
+    pub shadowed_by_kind: Mutex<Vec<(ResourceKind, Vec<ShadowedResource>)>>,
 }
 
 impl MockInstaller {
@@ -458,6 +459,19 @@ impl LocalInstaller for MockInstaller {
     }
     fn list_installed_cursors(&self) -> Result<Vec<String>, AppError> {
         Ok(self.cursors.lock().unwrap().clone())
+    }
+    fn list_shadowed_resources(
+        &self,
+        kind: ResourceKind,
+    ) -> Result<Vec<ShadowedResource>, AppError> {
+        Ok(self
+            .shadowed_by_kind
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default())
     }
 }
 

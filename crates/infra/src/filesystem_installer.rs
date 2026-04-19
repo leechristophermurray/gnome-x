@@ -1,8 +1,10 @@
 // Copyright 2026 GNOME X Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::theme_paths::{list_all, ResourcePaths};
-use gnomex_app::ports::LocalInstaller;
+use crate::theme_paths::{list_all, shadow_map, ResourcePaths, SearchPath};
+use gnomex_app::ports::{
+    LocalInstaller, ResourceKind, ShadowedLocation, ShadowedResource,
+};
 use gnomex_app::AppError;
 use gnomex_domain::{ExtensionUuid, ThemeType};
 use std::io::Cursor;
@@ -36,6 +38,17 @@ impl FilesystemInstaller {
         Self {
             data_dir,
             paths: ResourcePaths::from_env(),
+        }
+    }
+
+    /// Construct with explicit paths — required for hermetic tests
+    /// that can't share the process `$HOME` / `$XDG_*` environment
+    /// with other parallel tests. `data_dir` is the install target
+    /// (typically `xdg_data_home`).
+    pub fn with_paths(data_dir: impl Into<PathBuf>, paths: ResourcePaths) -> Self {
+        Self {
+            data_dir: data_dir.into(),
+            paths,
         }
     }
 
@@ -163,6 +176,45 @@ impl LocalInstaller for FilesystemInstaller {
         cursors.sort();
         cursors.dedup();
         Ok(cursors)
+    }
+
+    fn list_shadowed_resources(
+        &self,
+        kind: ResourceKind,
+    ) -> Result<Vec<ShadowedResource>, AppError> {
+        let search_paths: Vec<SearchPath> = match kind {
+            ResourceKind::Theme => self.paths.themes(),
+            ResourceKind::Icon => self.paths.icons(),
+            ResourceKind::Cursor => self.paths.cursors(),
+        };
+
+        let map = shadow_map(&search_paths);
+        let mut shadowed: Vec<ShadowedResource> = map
+            .into_iter()
+            .filter(|(_, paths)| paths.len() > 1)
+            .filter(|(name, paths)| {
+                // Cursors must actually have a cursors/ subdir to count.
+                if matches!(kind, ResourceKind::Cursor) {
+                    paths
+                        .iter()
+                        .any(|sp| sp.path.join(name).join("cursors").is_dir())
+                } else {
+                    true
+                }
+            })
+            .map(|(name, paths)| ShadowedResource {
+                locations: paths
+                    .iter()
+                    .map(|sp| ShadowedLocation {
+                        path: sp.path.join(&name).to_string_lossy().into_owned(),
+                        user_writable: sp.origin.is_user_writable(),
+                    })
+                    .collect(),
+                name,
+            })
+            .collect();
+        shadowed.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(shadowed)
     }
 }
 
