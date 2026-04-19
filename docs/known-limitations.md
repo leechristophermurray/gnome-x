@@ -135,6 +135,66 @@ a useful product.
 
 ---
 
+## AppImage icon overrides
+
+AppImages are self-contained `.AppImage` binaries that bundle their own
+icon set (PNG/SVG files in the AppImage squashfs). When the user
+launches one, several things can happen to its icons depending on how
+the AppImage is integrated:
+
+1. **Unintegrated AppImage (chmod +x, run directly).** The icon inside
+   the binary is only visible while the app is running — the taskbar
+   picks it up from `WM_ICON` / `_NET_WM_ICON` hints sent by the
+   window itself. No icon theme is consulted, so GNOME X's icon pack
+   selection has *no effect* on the running window icon.
+2. **Integrated via AppImageLauncher, Gear Lever, or similar.** These
+   tools extract the AppImage's `.desktop` file and icon into
+   `~/.local/share/applications/` and
+   `~/.local/share/icons/hicolor/*/apps/` at install time. From that
+   point the `.desktop` file references an icon name, and GNOME looks
+   that name up through the normal icon-theme lookup — **so a GNOME X
+   icon pack *can* theme it**, provided the icon pack includes an
+   entry with that exact name.
+3. **Extracted manually (`--appimage-extract`).** Same behaviour as
+   case 2 once the user wires the `.desktop` file into
+   `~/.local/share/applications/`.
+
+In practice cases (2) and (3) usually lose to the bundled icon because
+AppImage authors install their icon into *the user's hicolor theme
+directly* (`~/.local/share/icons/hicolor/256x256/apps/<app>.png`),
+which takes precedence over any named-icon theme GNOME X activates.
+This is a freedesktop.org icon-theme spec behaviour, not a GNOME X
+bug: hicolor is the last-resort fallback *and* the place apps are
+expected to drop their own icons, so a bundled icon there always wins.
+
+### Workarounds for AppImage icons
+
+- **Prefer icon packs that explicitly override common AppImage names.**
+  Packs like Papirus, Tela, and WhiteSur do this for the top-50-ish
+  AppImage apps (Cursor, OBS, Balena Etcher, Krita portable, etc.).
+  GNOME X's Explore view surfaces these packs first.
+- **For niche AppImages, the user can delete the bundled icon** from
+  `~/.local/share/icons/hicolor/<size>/apps/` after installing — once
+  it's gone the named-icon fallback chain reaches the active theme
+  and the pack's icon applies.
+- **Rebuilding the hicolor cache** (`gtk-update-icon-cache -f -t
+  ~/.local/share/icons/hicolor`) is sometimes needed after either
+  mitigation; GNOME Shell caches icons aggressively across restarts.
+
+### What GNOME X can and can't do
+
+GNOME X has no way to *detect* that a given icon was shipped inside an
+AppImage rather than a regular `.desktop` install — by the time the
+icon is in `~/.local/share/icons/hicolor/`, its provenance is gone.
+The best we can offer is a future "Shadowed Resources" panel (tracker
+item [GXF-012](https://github.com/leechristophermurray/gnome-x/issues/7))
+that lists icons installed into hicolor with a user-writable flag, so
+the user can see at a glance which icons are blocking their active
+pack from taking effect. That panel is the planned follow-up to this
+documentation.
+
+---
+
 ## Browser / Electron theme fidelity
 
 Even with our Chromium theme extension enabled, browsers cannot
