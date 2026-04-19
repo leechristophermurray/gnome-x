@@ -124,6 +124,16 @@
       <default>true</default>
       <summary>Show combo button inset border</summary>
     </key>
+    <key name="tb-sidebar-opacity" type="d">
+      <default>1.0</default>
+      <summary>Sidebar background opacity fraction</summary>
+      <description>Controls the left-nav sidebar opacity in apps like Nautilus/Files/Disks. 1.0 = fully opaque; &lt;1.0 lets the wallpaper or compositor blur bleed through.</description>
+    </key>
+    <key name="tb-sidebar-fg-override" type="s">
+      <default>""</default>
+      <summary>Sidebar foreground override hex</summary>
+      <description>Optional #rrggbb override for sidebar text. Empty string keeps the Adwaita default.</description>
+    </key>
     <key name="tb-notification-radius" type="d">
       <default>12.0</default>
       <summary>Notification banner corner radius</summary>

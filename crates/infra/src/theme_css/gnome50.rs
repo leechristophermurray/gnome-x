@@ -9,7 +9,7 @@
 //! - `prefers-reduced-motion` guard on blur/animation CSS
 //! - Wayland-only (no X11 fallback paths)
 
-use super::common::{gtk_csd_css, gtk_radius_css, gtk_tint_css};
+use super::common::{gtk_color_overrides_css, gtk_csd_css, gtk_radius_css, gtk_tint_css};
 use gnomex_app::ports::{ThemeCss, ThemeCssGenerator};
 use gnomex_app::AppError;
 use gnomex_domain::ThemeSpec;
@@ -43,9 +43,10 @@ impl Gnome50CssGenerator {
         // No style-dark.css generation — Libadwaita 1.9 logs deprecation
         // warnings if it finds separate dark variant files.
         format!(
-            "/* GNOME X — GTK4 overrides */\n\n{}\n{}\n{}",
+            "/* GNOME X — GTK4 overrides */\n\n{}\n{}\n{}\n{}",
             gtk_radius_css(spec),
             gtk_csd_css(spec),
+            gtk_color_overrides_css(spec),
             gtk_tint_css(spec),
         )
     }

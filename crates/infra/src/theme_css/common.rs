@@ -9,6 +9,14 @@ use gnomex_domain::{color::blend, HexColor, ThemeSpec};
 /// This is identical across GNOME versions since it targets GTK, not Shell.
 pub fn gtk_tint_css(spec: &ThemeSpec) -> String {
     let tint_pct = spec.tint.intensity.as_fraction();
+    let sidebar_alpha = spec.sidebar.opacity.as_fraction();
+
+    let tl = tint_pct + 0.025;
+    let tcl = tint_pct * 0.6;
+    let td = tint_pct;
+
+    let sidebar_light = sidebar_color_expr(&format!("mix(#ebebed, @accent_bg_color, {tl})"), sidebar_alpha);
+    let sidebar_dark = sidebar_color_expr(&format!("mix(#2e2e32, @accent_bg_color, {td})"), sidebar_alpha);
 
     format!(
         r#"/* Accent-tinted surfaces */
@@ -20,7 +28,7 @@ pub fn gtk_tint_css(spec: &ThemeSpec) -> String {
     @define-color popover_bg_color mix(#ffffff, @accent_bg_color, {tl});
     @define-color dialog_bg_color mix(#fafafb, @accent_bg_color, {tl});
     @define-color card_bg_color mix(#ffffff, @accent_bg_color, {tcl});
-    @define-color sidebar_bg_color mix(#ebebed, @accent_bg_color, {tl});
+    @define-color sidebar_bg_color {sidebar_light};
 }}
 
 @media (prefers-color-scheme: dark) {{
@@ -31,13 +39,21 @@ pub fn gtk_tint_css(spec: &ThemeSpec) -> String {
     @define-color popover_bg_color mix(#36363a, @accent_bg_color, {td});
     @define-color dialog_bg_color mix(#36363a, @accent_bg_color, {td});
     @define-color card_bg_color mix(rgba(255, 255, 255, 0.08), @accent_bg_color, {td});
-    @define-color sidebar_bg_color mix(#2e2e32, @accent_bg_color, {td});
+    @define-color sidebar_bg_color {sidebar_dark};
 }}
 "#,
-        tl = tint_pct + 0.025,
-        tcl = tint_pct * 0.6,
-        td = tint_pct,
     )
+}
+
+/// Wrap a sidebar background expression in `alpha()` iff the user has
+/// dialed opacity below fully opaque. Emitting the raw `mix()` when
+/// opacity == 1.0 keeps the generated CSS readable.
+fn sidebar_color_expr(mix_expr: &str, opacity: f64) -> String {
+    if opacity >= 0.999 {
+        mix_expr.to_string()
+    } else {
+        format!("alpha({mix_expr}, {opacity:.3})")
+    }
 }
 
 /// Generate border-radius rules for GTK4 elements.
@@ -142,7 +158,7 @@ pub fn gtk_color_overrides_css(spec: &ThemeSpec) -> String {
     css.push_str(&color_line("view_fg_color", &fg.view_fg));
     css.push_str(&color_line("headerbar_fg_color", &fg.headerbar_fg));
     css.push_str(&color_line("headerbar_border_color", &fg.headerbar_border));
-    css.push_str(&color_line("sidebar_fg_color", &fg.sidebar_fg));
+    css.push_str(&color_line("sidebar_fg_color", &spec.sidebar.fg_override));
 
     css.push_str("\n/* Semantic status colors */\n");
     css.push_str(&color_line("destructive_bg_color", &sc.destructive));

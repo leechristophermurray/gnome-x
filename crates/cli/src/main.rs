@@ -14,7 +14,7 @@ use gnomex_app::ports::{ShellCustomizer, ShellProxy};
 use gnomex_app::use_cases::{ApplyThemeUseCase, CustomizeShellUseCase, PacksUseCase};
 use gnomex_domain::{
     DashSpec, ForegroundSpec, HeaderbarSpec, HexColor, InsetSpec, NotificationSpec, Opacity,
-    PanelSpec, Radius, StatusColorSpec, ThemeSpec, TintSpec, WindowFrameSpec,
+    PanelSpec, Radius, SidebarSpec, StatusColorSpec, ThemeSpec, TintSpec, WindowFrameSpec,
 };
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
@@ -344,6 +344,18 @@ fn build_spec_from_gsettings() -> Result<ThemeSpec> {
             combo_inset: app.boolean("tb-combo-inset"),
         },
         foreground: ForegroundSpec::default(),
+        sidebar: SidebarSpec {
+            opacity: Opacity::from_fraction(app.double("tb-sidebar-opacity"))?,
+            fg_override: {
+                let raw = app.string("tb-sidebar-fg-override").to_string();
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(HexColor::new(trimmed)?)
+                }
+            },
+        },
         status_colors: StatusColorSpec::default(),
         notifications: NotificationSpec {
             radius: Radius::new(app.double("tb-notification-radius"))?,
