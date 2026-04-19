@@ -82,9 +82,18 @@ pub fn build_color_picker(
 
     // Build 9 GNOME accent toggle buttons
     for (i, &(id, label, hex)) in GNOME_COLORS.iter().enumerate() {
+        // Swatches are circular, so width == height must be enforced
+        // at every layer — GTK widget request, CSS min-width /
+        // min-height, and alignment. When they disagree (e.g. CSS
+        // min-width 24 vs widget width-request 28) and the parent
+        // suffix row stretches, we get a 24x28 ellipse instead.
         let btn = gtk::ToggleButton::builder()
             .width_request(28)
             .height_request(28)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .hexpand(false)
+            .vexpand(false)
             .tooltip_text(label)
             .active(current_id == Some(id))
             .build();
@@ -97,8 +106,8 @@ pub fn build_color_picker(
             ".{css_class} {{ \
                 background: {hex}; \
                 border-radius: 50%; \
-                min-width: 24px; \
-                min-height: 24px; \
+                min-width: 28px; \
+                min-height: 28px; \
                 padding: 0; \
                 border: 2px solid transparent; \
             }} \

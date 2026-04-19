@@ -1659,11 +1659,14 @@ impl SimpleComponent for ThemeBuilderModel {
                     );
                     let css_provider = gtk::CssProvider::new();
                     css_provider.load_from_string(&format!(
+                        // Match widget request (28x28) and CSS
+                        // minimums so a squeezing parent can't
+                        // produce a 24x28 ellipse — see bug #1.
                         ".{css_class} {{ \
                             background: {hex}; \
                             border-radius: 50%; \
-                            min-width: 24px; \
-                            min-height: 24px; \
+                            min-width: 28px; \
+                            min-height: 28px; \
                             padding: 0; \
                             border: 2px solid transparent; \
                         }} \
@@ -1685,6 +1688,10 @@ impl SimpleComponent for ThemeBuilderModel {
                         let btn = gtk::ToggleButton::builder()
                             .width_request(28)
                             .height_request(28)
+                            .halign(gtk::Align::Center)
+                            .valign(gtk::Align::Center)
+                            .hexpand(false)
+                            .vexpand(false)
                             .tooltip_text(&format!("{hex} \u{2192} {accent_id}"))
                             .build();
                         btn.add_css_class(&format!(
