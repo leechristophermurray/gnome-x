@@ -107,7 +107,7 @@ Use [Conventional Commits][cc] style:
 feat: add wallpaper preview in detail view
 fix: OCS search returning empty results for cursor category
 refactor: extract shared landing list builder
-docs: add Flatpak build instructions to README
+docs: add RPM build instructions to README
 ```
 
 - `feat:` --- new functionality
