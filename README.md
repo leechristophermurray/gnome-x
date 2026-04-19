@@ -233,6 +233,14 @@ gnome-x/
   install.sh                         System install script
 ```
 
+## Known limitations
+
+Some rendering concerns live below GNOME X's theming and GSettings
+surface (HiDPI/fractional-scaling blurriness, Flatpak sandbox
+visibility, browser theming fidelity, GDM login-screen theming). The
+[Known limitations](docs/known-limitations.md) document explains the
+causes, mitigations, and which tracker items track further work.
+
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full
