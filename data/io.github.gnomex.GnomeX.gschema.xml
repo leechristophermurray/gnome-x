@@ -142,5 +142,10 @@
       <summary>Floating dock</summary>
       <description>Turn the overview dash into an always-visible floating dock (requires the Dash to Dock extension)</description>
     </key>
+    <key name="cached-wallpaper-palette" type="as">
+      <default>[]</default>
+      <summary>Cached wallpaper palette</summary>
+      <description>Each entry is "HEX:ACCENT_ID". The experienced daemon rewrites this whenever the wallpaper changes, so the UI can show last-known swatches without re-running extraction. Independent of use-wallpaper-accent — that gates whether we also set the accent color automatically.</description>
+    </key>
   </schema>
 </schemalist>

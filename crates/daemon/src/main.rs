@@ -144,9 +144,12 @@ fn setup_accent_schedule_watcher(
     }
 }
 
-/// Watch wallpaper changes. When the user changes `picture-uri`, re-extract
-/// the dominant color and set it as the accent — but only if the `use-wallpaper-accent`
-/// key is enabled (opt-in feature, defaults to off).
+/// Watch wallpaper changes. On every change we:
+///   1. extract the top-N palette (always) and cache to
+///      `cached-wallpaper-palette` so the UI can show swatches
+///      immediately without running its own extraction.
+///   2. if the user has `use-wallpaper-accent` enabled, also pick the
+///      dominant match and write it to `accent-color`.
 fn setup_wallpaper_watcher() {
     let bg_settings = Rc::new(gio::Settings::new(BG_SCHEMA));
     let app_settings = Rc::new(gio::Settings::new(APP_SCHEMA));
@@ -154,21 +157,39 @@ fn setup_wallpaper_watcher() {
     let app_clone = app_settings.clone();
     let bg_clone = bg_settings.clone();
     bg_settings.clone().connect_changed(Some("picture-uri"), move |_, _| {
-        // Only react if the user opted in via `use-wallpaper-accent`.
-        // If the key doesn't exist in the schema yet, we silently skip.
+        let uri = bg_clone.string("picture-uri").to_string();
+        let Some(path) = uri.strip_prefix("file://") else {
+            return;
+        };
+        tracing::info!("wallpaper changed: {uri}");
+
+        // --- Always: extract palette and cache it. ---
+        match extract_wallpaper_palette(path) {
+            Ok(palette) if !palette.is_empty() => {
+                // GSettings 'as' array — one entry per (hex, accent_id)
+                // pair, delimited with ':' so UI can parse cheaply.
+                let encoded: Vec<String> = palette
+                    .iter()
+                    .map(|(hex, id)| format!("{hex}:{id}"))
+                    .collect();
+                let refs: Vec<&str> = encoded.iter().map(String::as_str).collect();
+                let _ = app_clone.set_strv("cached-wallpaper-palette", refs);
+                tracing::info!(
+                    "cached wallpaper palette: {} colors",
+                    palette.len()
+                );
+            }
+            Ok(_) => tracing::warn!("no dominant colors extracted from wallpaper"),
+            Err(e) => tracing::warn!("wallpaper extraction failed: {e}"),
+        }
+
+        // --- Opt-in: also set the accent color. ---
         let wants_reactive = app_clone
             .settings_schema()
             .map(|s| s.has_key("use-wallpaper-accent"))
             .unwrap_or(false)
             && app_clone.boolean("use-wallpaper-accent");
-
-        if !wants_reactive {
-            return;
-        }
-
-        let uri = bg_clone.string("picture-uri").to_string();
-        tracing::info!("wallpaper changed: {uri}");
-        if let Some(path) = uri.strip_prefix("file://") {
+        if wants_reactive {
             match extract_dominant_accent(path) {
                 Ok(Some(accent_id)) => {
                     let iface = gio::Settings::new(IFACE_SCHEMA);
@@ -176,7 +197,7 @@ fn setup_wallpaper_watcher() {
                     tracing::info!("auto-accent from wallpaper → {accent_id}");
                 }
                 Ok(None) => tracing::warn!("no dominant color extracted from wallpaper"),
-                Err(e) => tracing::warn!("wallpaper extraction failed: {e}"),
+                Err(e) => tracing::warn!("accent extraction failed: {e}"),
             }
         }
     });
@@ -377,4 +398,71 @@ fn extract_dominant_accent(path: &str) -> Result<Option<String>> {
         }
     }
     Ok(Some(best_id.to_owned()))
+}
+
+/// Extract up to N distinct accent-mapped colors from a wallpaper image.
+/// Returns `(hex, accent_id)` pairs ordered by dominance. Duplicates by
+/// accent id are filtered so the user's swatches span distinct hues.
+fn extract_wallpaper_palette(path: &str) -> Result<Vec<(String, String)>> {
+    const MAX_COLORS: usize = 5;
+
+    let pixbuf = Pixbuf::from_file_at_scale(path, 64, 64, true)
+        .context("failed to load wallpaper image")?;
+    let Some(pixels) = pixbuf.pixel_bytes() else {
+        return Ok(Vec::new());
+    };
+    let channels = pixbuf.n_channels() as usize;
+    let data = pixels.as_ref();
+
+    let mut color_buckets: std::collections::HashMap<(u16, u8, u8), u32> =
+        std::collections::HashMap::new();
+
+    for chunk in data.chunks_exact(channels) {
+        if channels < 3 {
+            continue;
+        }
+        let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
+        let (h, s, v) = color::rgb_to_hsv(r, g, b);
+        if s < 15 || v < 25 || v > 240 {
+            continue;
+        }
+        let hue_bin = (h / 10) * 10;
+        let sat_bin = (s / 85).min(2);
+        let val_bin = (v / 85).min(2);
+        *color_buckets.entry((hue_bin, sat_bin, val_bin)).or_default() += 1;
+    }
+
+    let mut buckets: Vec<_> = color_buckets.into_iter().collect();
+    buckets.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let mut results = Vec::with_capacity(MAX_COLORS);
+    let mut used_accents = std::collections::HashSet::new();
+    for ((hue_bin, sat_bin, val_bin), _) in buckets.iter().take(20) {
+        let h = *hue_bin + 5;
+        let s = (*sat_bin as u16) * 85 + 42;
+        let v = (*val_bin as u16) * 85 + 42;
+        let (r, g, b) = color::hsv_to_rgb(h, s.min(255) as u8, v.min(255) as u8);
+
+        // Map to closest GNOME accent; skip if we've already taken a
+        // color mapped to this accent (keeps swatches visually distinct).
+        let mut best_id = "blue";
+        let mut best_dist = u32::MAX;
+        for &(id, hex) in ACCENT_COLORS {
+            let a = HexColor::new(hex).map(|c| c.to_rgb()).unwrap_or((0, 0, 0));
+            let d = color::color_distance((r, g, b), a);
+            if d < best_dist {
+                best_dist = d;
+                best_id = id;
+            }
+        }
+        if used_accents.contains(best_id) {
+            continue;
+        }
+        used_accents.insert(best_id.to_owned());
+        results.push((format!("#{r:02x}{g:02x}{b:02x}"), best_id.to_owned()));
+        if results.len() >= MAX_COLORS {
+            break;
+        }
+    }
+    Ok(results)
 }

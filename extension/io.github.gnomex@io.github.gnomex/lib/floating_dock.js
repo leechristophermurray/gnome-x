@@ -33,6 +33,10 @@ const HOTZONE_WIDTH_FRAC = 0.5; // 50% of monitor width, centred
 const SHOW_DURATION_MS = 180;
 const HIDE_DURATION_MS = 220;
 const HIDE_DELAY_MS = 400;
+/** Safety net: if the dock gets revealed but the cursor never settles on it
+ * (e.g. the user mouses past the hot-zone to another window), auto-hide
+ * after this delay so the dock doesn't linger indefinitely. */
+const AUTO_HIDE_AFTER_REVEAL_MS = 2000;
 const SLIDE_OFFSET = 24; // px the dock drops while hiding
 
 export class FloatingDock {
@@ -71,21 +75,27 @@ export class FloatingDock {
         // --- Layout signals ---
         this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._reposition());
 
-        // --- Overview signals: hide during overview, don't re-show after ---
+        // --- Overview signals: hide during overview, then re-check
+        //     hot-zone hover on close so a pointer already parked at
+        //     the bottom edge still triggers a reveal.
         this._overviewShowingId = Main.overview.connect('showing', () => this._hide(/* immediate */ true));
         this._overviewHiddenId = Main.overview.connect('hidden', () => {
-            // Intentional no-op: stay hidden until the user hovers
-            // the hot-zone. Re-appearing the moment the overview
-            // dismisses feels clingy.
+            if (this._pointerInHotZone()) {
+                this._show();
+            }
         });
 
         // --- Reveal / autohide signals ---
         this._hotZoneEnterId = this._hotZone.connect('enter-event', () => this._show());
-        this._enterId = this._container.connect('enter-event', () => this._cancelScheduledHide());
+        this._enterId = this._container.connect('enter-event', () => {
+            this._cancelScheduledHide();
+            this._cancelAutoHide();
+        });
         this._leaveId = this._container.connect('leave-event', () => this._scheduleHide());
 
         this._rebuildPending = false;
         this._hideTimerId = 0;
+        this._autoHideTimerId = 0;
         this._hidden = false;
 
         Main.layoutManager.addChrome(this._container, {
@@ -208,20 +218,63 @@ export class FloatingDock {
     _show() {
         if (Main.overview.visible) return;
         this._cancelScheduledHide();
-        if (!this._hidden) return;
-        this._hidden = false;
-        this._container.show();
-        this._container.remove_all_transitions();
-        // Clutter properties are hyphenated / snake_case (`translation-y`
-        // / `translation_y`). camelCase keys in an `ease()` payload get
-        // silently ignored, which leaves the dock clipped 24px below
-        // its intended position after the first hide animation.
-        this._container.ease({
-            opacity: 255,
-            translation_y: 0,
-            duration: SHOW_DURATION_MS,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-        });
+        if (this._hidden) {
+            this._hidden = false;
+            this._container.show();
+            this._container.remove_all_transitions();
+            // Clutter properties are hyphenated / snake_case
+            // (`translation-y` / `translation_y`). camelCase keys in
+            // an `ease()` payload are silently ignored, which leaves
+            // the dock clipped 24px below its intended position.
+            this._container.ease({
+                opacity: 255,
+                translation_y: 0,
+                duration: SHOW_DURATION_MS,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            });
+        }
+        // Arm the auto-hide safety net. If the pointer never settles
+        // on the dock (user mouses past the hot-zone on the way to
+        // something else), this timer fires and puts the dock back.
+        // The timer is cancelled the moment the pointer enters the
+        // dock — so a hovered dock will stay visible as long as you
+        // keep the pointer on it.
+        this._armAutoHide();
+    }
+
+    _armAutoHide() {
+        this._cancelAutoHide();
+        this._autoHideTimerId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            AUTO_HIDE_AFTER_REVEAL_MS,
+            () => {
+                this._autoHideTimerId = 0;
+                if (this._container && !this._container.hover) {
+                    this._hide();
+                }
+                return GLib.SOURCE_REMOVE;
+            },
+        );
+    }
+
+    _cancelAutoHide() {
+        if (this._autoHideTimerId) {
+            GLib.source_remove(this._autoHideTimerId);
+            this._autoHideTimerId = 0;
+        }
+    }
+
+    /**
+     * Is the pointer currently inside the hot-zone rectangle?
+     * Used on overview-hidden to fire a reveal when the pointer was
+     * already parked at the screen edge while the overview obscured it.
+     */
+    _pointerInHotZone() {
+        if (!this._hotZone) return false;
+        const [x, y] = global.get_pointer();
+        const [hzX, hzY] = this._hotZone.get_position();
+        const [hzW, hzH] = this._hotZone.get_size();
+        return x >= hzX && x < hzX + hzW && y >= hzY && y < hzY + hzH;
     }
 
     _hide(immediate = false) {
@@ -275,6 +328,7 @@ export class FloatingDock {
 
     destroy() {
         this._cancelScheduledHide();
+        this._cancelAutoHide();
 
         const disc = (obj, id) => { if (obj && id) obj.disconnect(id); };
         disc(this._favorites, this._favoritesId);

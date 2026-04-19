@@ -1591,6 +1591,27 @@ impl SimpleComponent for ThemeBuilderModel {
             });
         }
 
+        // --- Cached wallpaper palette ------------------------------------
+        // Paint the last-known swatches right away so the user doesn't
+        // have to click Extract every time the panel opens. Then watch
+        // the GSetting so when the daemon re-extracts on wallpaper
+        // change, the swatches update live.
+        let cached = load_cached_palette(&app_settings);
+        if !cached.is_empty() {
+            sender.input(ThemeBuilderMsg::WallpaperColorsReady(cached));
+        }
+        {
+            let sender = sender.clone();
+            app_settings
+                .clone()
+                .connect_changed(Some("cached-wallpaper-palette"), move |s, _| {
+                    let palette = load_cached_palette(s);
+                    if !palette.is_empty() {
+                        sender.input(ThemeBuilderMsg::WallpaperColorsReady(palette));
+                    }
+                });
+        }
+
         ComponentParts { model, widgets }
     }
 
@@ -2261,6 +2282,31 @@ fn extract_wallpaper_colors(path: &str) -> Result<Vec<(String, String)>, String>
     }
 
     Ok(results)
+}
+
+/// Parse the `cached-wallpaper-palette` GSetting strv back into the
+/// `Vec<(hex, accent_id)>` shape the UI renders. Silently skips
+/// malformed entries so a corrupted cache can't break the page.
+fn load_cached_palette(settings: &gio::Settings) -> Vec<(String, String)> {
+    let has_key = settings
+        .settings_schema()
+        .map(|s| s.has_key("cached-wallpaper-palette"))
+        .unwrap_or(false);
+    if !has_key {
+        return Vec::new();
+    }
+    settings
+        .strv("cached-wallpaper-palette")
+        .iter()
+        .filter_map(|entry| {
+            let s = entry.as_str();
+            let (hex, accent) = s.split_once(':')?;
+            if hex.is_empty() || accent.is_empty() {
+                return None;
+            }
+            Some((hex.to_owned(), accent.to_owned()))
+        })
+        .collect()
 }
 
 fn closest_accent(r: u8, g: u8, b: u8) -> String {

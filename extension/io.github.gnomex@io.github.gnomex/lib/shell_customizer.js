@@ -104,34 +104,45 @@ export class ShellCustomizerBase {
         // list is rebuilt on monitor changes — we re-fetch on each
         // overview show so hotplug events don't leave stale refs.
         //
-        // `Shell.BlurEffect` exposes GObject *properties*, not setter
-        // methods, on the versions we support. Use `set_property`
-        // which is uniform across every GObject subclass.
-        //
-        // `BlurMode.ACTOR` blurs the actor's *own* pixels, which is
-        // what we want for wallpaper actors at the bottom of the
-        // stack. `BACKGROUND` mode reads whatever is rendered
-        // behind — for a wallpaper that's nothing, so it produces
-        // no visible effect.
+        // We target each monitor's `Meta.BackgroundActor` directly,
+        // matching what Blur My Shell does for overview blur.
         const actors = this._backgroundActors();
+        console.log(
+            `[gnome-x] overview blur: ${actors.length} background actor(s) detected` +
+            ` (visible=${actors.map(a => a.visible).join(',')},` +
+            ` size=${actors.map(a => `${a.width}x${a.height}`).join(',')})`
+        );
         for (const actor of actors) {
             if (actor.get_effect(BLUR_EFFECT_NAME)) continue;
-            const effect = new Shell.BlurEffect();
+
+            // Pass the properties via the constructor object — this
+            // is what BMS and other battle-tested overview-blur
+            // implementations use, and it lets the GObject machinery
+            // validate every property in one go.
+            let effect;
             try {
-                effect.set_property('sigma', BLUR_SIGMA);
-                effect.set_property('brightness', BLUR_BRIGHTNESS);
-                if (Shell.BlurMode && 'ACTOR' in Shell.BlurMode) {
-                    effect.set_property('mode', Shell.BlurMode.ACTOR);
-                }
+                effect = new Shell.BlurEffect({
+                    sigma: BLUR_SIGMA,
+                    brightness: BLUR_BRIGHTNESS,
+                    mode: Shell.BlurMode.ACTOR,
+                });
             } catch (e) {
-                console.log(`[gnome-x] blur configuration failed: ${e}`);
+                console.log(`[gnome-x] blur ctor failed: ${e} — trying fallback`);
+                effect = new Shell.BlurEffect();
+                try {
+                    effect.sigma = BLUR_SIGMA;
+                    effect.brightness = BLUR_BRIGHTNESS;
+                    effect.mode = Shell.BlurMode.ACTOR;
+                } catch (e2) {
+                    console.log(`[gnome-x] blur fallback also failed: ${e2}`);
+                }
             }
+            console.log(
+                `[gnome-x] blur effect: sigma=${effect.sigma} brightness=${effect.brightness} mode=${effect.mode}`
+            );
             actor.add_effect_with_name(BLUR_EFFECT_NAME, effect);
             this._blurredActors.push(actor);
         }
-        console.log(
-            `[gnome-x] overview blur attached to ${this._blurredActors.length} background actor(s)`
-        );
     }
 
     _detachBlurFromBackgrounds() {
