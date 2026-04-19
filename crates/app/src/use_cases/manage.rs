@@ -95,3 +95,57 @@ impl ManageUseCase {
         self.installer.list_installed_cursors()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{MockExtensionRepo, MockInstaller, MockShellProxy};
+    use gnomex_domain::ShellVersion;
+
+    fn uuid() -> ExtensionUuid {
+        ExtensionUuid::new("dash-to-dock@micxgx.gmail.com").unwrap()
+    }
+
+    #[tokio::test]
+    async fn toggle_extension_true_enables_via_shell() {
+        let installer = MockInstaller::new();
+        let shell = MockShellProxy::new(ShellVersion::new(47, 0));
+        let repo = MockExtensionRepo::new();
+        let uc = ManageUseCase::new(installer, shell.clone(), repo);
+
+        uc.toggle_extension(&uuid(), true).await.unwrap();
+
+        assert_eq!(
+            shell.enabled.lock().unwrap().as_slice(),
+            &["dash-to-dock@micxgx.gmail.com".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn toggle_extension_false_does_not_enable() {
+        let installer = MockInstaller::new();
+        let shell = MockShellProxy::new(ShellVersion::new(47, 0));
+        let repo = MockExtensionRepo::new();
+        let uc = ManageUseCase::new(installer, shell.clone(), repo);
+
+        uc.toggle_extension(&uuid(), false).await.unwrap();
+
+        assert!(shell.enabled.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_installed_lists_forward_to_installer() {
+        let installer = MockInstaller::new();
+        installer.themes.lock().unwrap().push("Adwaita".into());
+        installer.icons.lock().unwrap().push("Papirus".into());
+        installer.cursors.lock().unwrap().push("Bibata".into());
+
+        let shell = MockShellProxy::new(ShellVersion::new(47, 0));
+        let repo = MockExtensionRepo::new();
+        let uc = ManageUseCase::new(installer, shell, repo);
+
+        assert_eq!(uc.list_installed_themes().unwrap(), vec!["Adwaita"]);
+        assert_eq!(uc.list_installed_icons().unwrap(), vec!["Papirus"]);
+        assert_eq!(uc.list_installed_cursors().unwrap(), vec!["Bibata"]);
+    }
+}

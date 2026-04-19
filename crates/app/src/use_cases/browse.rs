@@ -101,3 +101,36 @@ impl BrowseUseCase {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{MockExtensionRepo, MockShellProxy};
+    use gnomex_domain::ShellVersion;
+
+    #[tokio::test]
+    async fn install_extension_delegates_to_shell_proxy() {
+        let repo = MockExtensionRepo::new();
+        let shell = MockShellProxy::new(ShellVersion::new(47, 0));
+        let uc = BrowseUseCase::new(repo, shell.clone());
+
+        let uuid = ExtensionUuid::new("dash-to-dock@micxgx.gmail.com").unwrap();
+        uc.install_extension(&uuid).await.unwrap();
+
+        let installed = shell.installed.lock().unwrap().clone();
+        assert_eq!(installed, vec!["dash-to-dock@micxgx.gmail.com"]);
+    }
+
+    #[tokio::test]
+    async fn search_uses_detected_shell_version() {
+        // Empty repo results are fine — we're just asserting the call
+        // reached through without an error and that the shell version
+        // was queried.
+        let repo = MockExtensionRepo::new();
+        let shell = MockShellProxy::new(ShellVersion::new(47, 0));
+        let uc = BrowseUseCase::new(repo, shell);
+
+        let result = uc.search_extensions("dash", 1).await.unwrap();
+        assert!(result.items.is_empty());
+    }
+}

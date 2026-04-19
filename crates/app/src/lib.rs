@@ -10,4 +10,7 @@ pub mod error;
 pub mod ports;
 pub mod use_cases;
 
+#[cfg(test)]
+mod testing;
+
 pub use error::*;

@@ -283,6 +283,165 @@ impl PacksUseCase {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{
+        enable_animations, sample_pack, MockAppSettings, MockAppearance, MockContentRepo,
+        MockInstaller, MockPackStorage, MockShellCustomizer, MockShellProxy,
+    };
+    use gnomex_domain::{GSettingOverride, ShellTweak, ShellTweakId, ShellVersion, TweakValue};
+
+    fn build(
+        storage: std::sync::Arc<MockPackStorage>,
+        customizer: std::sync::Arc<MockShellCustomizer>,
+        app_settings: std::sync::Arc<MockAppSettings>,
+    ) -> PacksUseCase {
+        PacksUseCase::new(
+            storage,
+            MockAppearance::new(),
+            MockShellProxy::new(ShellVersion::new(47, 0)),
+            MockInstaller::new(),
+            MockContentRepo::new(),
+            app_settings,
+            customizer,
+        )
+    }
+
+    #[tokio::test]
+    async fn snapshot_captures_shell_tweaks_and_gsettings_overrides() {
+        let storage = MockPackStorage::new();
+        let customizer = MockShellCustomizer::with_snapshot(
+            vec![ShellTweakId::EnableAnimations],
+            vec![enable_animations(true)],
+        );
+        let app_settings = MockAppSettings::with_snapshot(vec![GSettingOverride {
+            key: "tb-window-radius".into(),
+            value: "25.0".into(),
+        }]);
+        let uc = build(storage.clone(), customizer, app_settings);
+
+        let id = uc
+            .snapshot_current("Test".into(), "desc".into(), "me".into())
+            .await
+            .unwrap();
+
+        let saved = storage.saved.lock().unwrap().clone();
+        assert_eq!(saved.len(), 1);
+        let pack = &saved[0];
+        assert_eq!(pack.id, id);
+        // v2 format — new packs ship shell_tweaks.
+        assert_eq!(pack.pack_format, 2);
+        // Shell tweaks came from the customizer.
+        assert_eq!(pack.shell_tweaks, vec![enable_animations(true)]);
+        // GSettings overrides came from app_settings.
+        assert_eq!(pack.gsettings_overrides.len(), 1);
+        assert_eq!(pack.gsettings_overrides[0].key, "tb-window-radius");
+    }
+
+    #[tokio::test]
+    async fn apply_pack_fans_tweaks_to_customizer_and_overrides_to_app_settings() {
+        let mut pack = sample_pack("fan-out");
+        pack.gsettings_overrides = vec![
+            GSettingOverride {
+                key: "tb-window-radius".into(),
+                value: "30.0".into(),
+            },
+            GSettingOverride {
+                key: "tb-panel-opacity".into(),
+                value: "85.0".into(),
+            },
+        ];
+        pack.shell_tweaks = vec![
+            enable_animations(false),
+            ShellTweak {
+                id: ShellTweakId::ShowWeekday,
+                value: TweakValue::Bool(true),
+            },
+        ];
+
+        let storage = MockPackStorage::with_loadable(vec![pack.clone()]);
+        let customizer = MockShellCustomizer::new(vec![
+            ShellTweakId::EnableAnimations,
+            ShellTweakId::ShowWeekday,
+        ]);
+        let app_settings = MockAppSettings::new();
+        let uc = build(storage, customizer.clone(), app_settings.clone());
+
+        uc.apply_pack(&pack.id).await.unwrap();
+
+        // GSettings overrides went through.
+        let applied = app_settings.applied.lock().unwrap().clone();
+        assert_eq!(applied.len(), 2);
+        assert_eq!(applied[0].key, "tb-window-radius");
+        assert_eq!(applied[1].key, "tb-panel-opacity");
+
+        // Shell tweaks got replayed in order.
+        let tweaks = customizer.applies.lock().unwrap().clone();
+        assert_eq!(tweaks.len(), 2);
+        assert_eq!(tweaks[0].id, ShellTweakId::EnableAnimations);
+        assert_eq!(tweaks[1].id, ShellTweakId::ShowWeekday);
+    }
+
+    #[tokio::test]
+    async fn apply_pack_with_empty_tweaks_does_not_call_customizer() {
+        // v1 packs (and empty v2 packs) shouldn't trigger spurious
+        // tweak writes — that would undo state the user may have
+        // customized after saving the pack.
+        let pack = sample_pack("empty");
+        let storage = MockPackStorage::with_loadable(vec![pack.clone()]);
+        let customizer = MockShellCustomizer::new(vec![ShellTweakId::EnableAnimations]);
+        let app_settings = MockAppSettings::new();
+        let uc = build(storage, customizer.clone(), app_settings.clone());
+
+        uc.apply_pack(&pack.id).await.unwrap();
+
+        assert!(customizer.applies.lock().unwrap().is_empty());
+        assert!(app_settings.applied.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_packs_forwards_to_storage() {
+        let packs = vec![
+            sample_pack("one"),
+            sample_pack("two"),
+        ];
+        let storage = MockPackStorage::with_loadable(packs);
+        let customizer = MockShellCustomizer::new(vec![]);
+        let app_settings = MockAppSettings::new();
+        let uc = build(storage, customizer, app_settings);
+
+        let summaries = uc.list_packs().unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].id, "one");
+        assert_eq!(summaries[1].id, "two");
+    }
+
+    #[test]
+    fn load_pack_returns_from_storage() {
+        let pack = sample_pack("target");
+        let storage = MockPackStorage::with_loadable(vec![pack.clone()]);
+        let customizer = MockShellCustomizer::new(vec![]);
+        let app_settings = MockAppSettings::new();
+        let uc = build(storage, customizer, app_settings);
+
+        let loaded = uc.load_pack("target").unwrap();
+        assert_eq!(loaded.id, pack.id);
+    }
+
+    #[test]
+    fn load_missing_pack_errors() {
+        let storage = MockPackStorage::new();
+        let customizer = MockShellCustomizer::new(vec![]);
+        let app_settings = MockAppSettings::new();
+        let uc = build(storage, customizer, app_settings);
+
+        let err = uc.load_pack("nope").unwrap_err();
+        // Storage returns a Storage error wrapping "not found".
+        assert!(matches!(err, AppError::Storage(_)));
+    }
+}
+
 /// Generate a URL-safe slug from a name.
 fn slug(name: &str) -> String {
     name.to_lowercase()
