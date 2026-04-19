@@ -4,7 +4,9 @@
 //! GNOME 45 CSS adapter.
 //! Shell changes: panel reworked with .panel-button, overview restructured.
 
-use super::common::{gtk_csd_css, gtk_radius_css, gtk_tint_css, tint_shell_surfaces};
+use super::common::{
+    gtk_color_overrides_css, gtk_csd_css, gtk_radius_css, gtk_tint_css, tint_shell_surfaces,
+};
 use gnomex_app::ports::{ThemeCss, ThemeCssGenerator};
 use gnomex_app::AppError;
 use gnomex_domain::ThemeSpec;
@@ -27,9 +29,10 @@ impl ThemeCssGenerator for Gnome45CssGenerator {
 impl Gnome45CssGenerator {
     fn gtk(&self, spec: &ThemeSpec) -> String {
         format!(
-            "/* GNOME X — GTK4 overrides */\n\n{}\n{}\n{}",
+            "/* GNOME X — GTK4 overrides */\n\n{}\n{}\n{}\n{}",
             gtk_radius_css(spec),
             gtk_csd_css(spec),
+            gtk_color_overrides_css(spec),
             gtk_tint_css(spec),
         )
     }

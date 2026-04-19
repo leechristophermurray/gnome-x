@@ -142,7 +142,29 @@ pub struct ForegroundSpec {
     pub view_fg: Option<HexColor>,
     pub headerbar_fg: Option<HexColor>,
     pub headerbar_border: Option<HexColor>,
-    pub sidebar_fg: Option<HexColor>,
+}
+
+/// Sidebar-specific controls. Nautilus, Files, Disks, Settings, and any
+/// AdwOverlaySplitView app render a left nav sidebar; this spec groups
+/// the knobs that govern it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SidebarSpec {
+    /// Background opacity. 1.0 = fully opaque (default Adwaita
+    /// behaviour); < 1.0 wraps `sidebar_bg_color` in `alpha()` so the
+    /// wallpaper or compositor blur shows through.
+    pub opacity: Opacity,
+    /// Optional foreground override for sidebar text. `None` keeps the
+    /// Adwaita default `sidebar_fg_color`.
+    pub fg_override: Option<HexColor>,
+}
+
+impl Default for SidebarSpec {
+    fn default() -> Self {
+        Self {
+            opacity: Opacity(1.0),
+            fg_override: None,
+        }
+    }
 }
 
 /// Semantic status color overrides (None = use Adwaita defaults).
@@ -177,6 +199,7 @@ pub struct ThemeSpec {
     pub window_frame: WindowFrameSpec,
     pub insets: InsetSpec,
     pub foreground: ForegroundSpec,
+    pub sidebar: SidebarSpec,
     pub status_colors: StatusColorSpec,
     pub notifications: NotificationSpec,
     pub overview_blur: bool,
@@ -215,6 +238,7 @@ impl ThemeSpec {
                 combo_inset: true,
             },
             foreground: ForegroundSpec::default(),
+            sidebar: SidebarSpec::default(),
             status_colors: StatusColorSpec::default(),
             notifications: NotificationSpec {
                 radius: Radius(12.0),

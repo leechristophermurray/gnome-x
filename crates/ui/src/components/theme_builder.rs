@@ -10,7 +10,7 @@ use crate::services::AppServices;
 use adw::prelude::*;
 use gnomex_app::use_cases::ApplyThemeUseCase;
 use gnomex_domain::theme_capability::{self, ThemeControlId};
-use gnomex_domain::{DashSpec, HexColor, Opacity, PanelSpec, Radius, ThemeSpec, TintSpec};
+use gnomex_domain::{DashSpec, HexColor, Opacity, PanelSpec, Radius, SidebarSpec, ThemeSpec, TintSpec};
 use relm4::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -55,6 +55,9 @@ pub struct ThemeBuilderModel {
     separator_opacity: f64,
     focus_ring_width: f64,
     combo_inset: bool,
+    // Sidebar (Nautilus/Files/Disks left-nav)
+    sidebar_opacity: f64,
+    sidebar_fg_override: String,
     // Notification
     notification_radius: f64,
     notification_opacity: f64,
@@ -122,6 +125,9 @@ pub enum ThemeBuilderMsg {
     SetSeparatorOpacity(f64),
     SetFocusRingWidth(f64),
     SetComboInset(bool),
+    // Sidebar
+    SetSidebarOpacity(f64),
+    SetSidebarFgOverride(String),
     // Notifications
     SetNotificationRadius(f64),
     SetNotificationOpacity(f64),
@@ -1258,6 +1264,74 @@ impl SimpleComponent for ThemeBuilderModel {
         }
         inset_group.add(&combo_inset_switch);
 
+        // === Sidebar (Nautilus / Files / Disks left-nav) ===
+        let sidebar_group = adw::PreferencesGroup::builder()
+            .title("Sidebar")
+            .description(
+                "Controls the left navigation sidebar rendered by Nautilus, \
+                 Files, Disks, Settings, and any AdwOverlaySplitView app.",
+            )
+            .build();
+
+        let sidebar_opacity_row = build_spin_row(
+            "Sidebar Opacity",
+            "Background opacity of the left-nav sidebar (100% = opaque)",
+            0.0,
+            100.0,
+            app_settings.double("tb-sidebar-opacity") * 100.0,
+            5.0,
+        );
+        {
+            let sender = sender.clone();
+            sidebar_opacity_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetSidebarOpacity(row.value() / 100.0));
+            });
+        }
+        sidebar_group.add(&sidebar_opacity_row);
+
+        let sidebar_fg_row = adw::ActionRow::builder()
+            .title("Sidebar Text Color")
+            .subtitle("Override the sidebar foreground colour. Leave default to follow the active colour scheme.")
+            .build();
+        let sidebar_fg_btn = gtk::ColorDialogButton::builder().build();
+        let sidebar_fg_dialog = gtk::ColorDialog::builder()
+            .title("Sidebar Text Color")
+            .with_alpha(false)
+            .build();
+        sidebar_fg_btn.set_dialog(&sidebar_fg_dialog);
+        let saved_sidebar_fg = app_settings.string("tb-sidebar-fg-override").to_string();
+        if let Ok(rgba) = gtk::gdk::RGBA::parse(&saved_sidebar_fg) {
+            sidebar_fg_btn.set_rgba(&rgba);
+        }
+        let sidebar_fg_reset = gtk::Button::builder()
+            .icon_name("edit-clear-symbolic")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .tooltip_text("Reset to default (follow colour scheme)")
+            .build();
+        {
+            let sender = sender.clone();
+            sidebar_fg_btn.connect_rgba_notify(move |btn| {
+                let rgba = btn.rgba();
+                let hex = format!(
+                    "#{:02x}{:02x}{:02x}",
+                    (rgba.red() * 255.0) as u8,
+                    (rgba.green() * 255.0) as u8,
+                    (rgba.blue() * 255.0) as u8,
+                );
+                sender.input(ThemeBuilderMsg::SetSidebarFgOverride(hex));
+            });
+        }
+        {
+            let sender = sender.clone();
+            sidebar_fg_reset.connect_clicked(move |_| {
+                sender.input(ThemeBuilderMsg::SetSidebarFgOverride(String::new()));
+            });
+        }
+        sidebar_fg_row.add_suffix(&sidebar_fg_btn);
+        sidebar_fg_row.add_suffix(&sidebar_fg_reset);
+        sidebar_group.add(&sidebar_fg_row);
+
         // appended in final ordering
 
         // === Window Behavior (Mutter) ===
@@ -1402,7 +1476,7 @@ impl SimpleComponent for ThemeBuilderModel {
             &[&accent_group, &tint_group, &shared_group, &panel_group, &dash_group, &notif_group, &scheme_group],
         );
         let windows_page = build_category_page(
-            &[&radii_group, &csd_group, &inset_group, &window_group, &wm_group],
+            &[&radii_group, &csd_group, &inset_group, &sidebar_group, &window_group, &wm_group],
         );
         let typography_page = build_category_page(
             &[&font_group, &cursor_group],
@@ -1543,6 +1617,8 @@ impl SimpleComponent for ThemeBuilderModel {
             separator_opacity: app_settings.double("tb-separator-opacity"),
             focus_ring_width: app_settings.double("tb-focus-ring-width"),
             combo_inset: app_settings.boolean("tb-combo-inset"),
+            sidebar_opacity: app_settings.double("tb-sidebar-opacity"),
+            sidebar_fg_override: app_settings.string("tb-sidebar-fg-override").to_string(),
             notification_radius: app_settings.double("tb-notification-radius"),
             notification_opacity: app_settings.double("tb-notification-opacity"),
             scheduled_accent_enabled: saved_sched_enabled,
@@ -1953,6 +2029,9 @@ impl SimpleComponent for ThemeBuilderModel {
             ThemeBuilderMsg::SetSeparatorOpacity(v) => self.separator_opacity = v,
             ThemeBuilderMsg::SetFocusRingWidth(v) => self.focus_ring_width = v,
             ThemeBuilderMsg::SetComboInset(v) => self.combo_inset = v,
+            // --- Sidebar ---
+            ThemeBuilderMsg::SetSidebarOpacity(v) => self.sidebar_opacity = v,
+            ThemeBuilderMsg::SetSidebarFgOverride(v) => self.sidebar_fg_override = v,
             // --- Notifications ---
             ThemeBuilderMsg::SetNotificationRadius(v) => self.notification_radius = v,
             ThemeBuilderMsg::SetNotificationOpacity(v) => self.notification_opacity = v,
@@ -2110,6 +2189,8 @@ impl SimpleComponent for ThemeBuilderModel {
                 let _ = app.set_double("tb-separator-opacity", self.separator_opacity);
                 let _ = app.set_double("tb-focus-ring-width", self.focus_ring_width);
                 let _ = app.set_boolean("tb-combo-inset", self.combo_inset);
+                let _ = app.set_double("tb-sidebar-opacity", self.sidebar_opacity);
+                let _ = app.set_string("tb-sidebar-fg-override", &self.sidebar_fg_override);
                 let _ = app.set_double("tb-notification-radius", self.notification_radius);
                 let _ = app.set_double("tb-notification-opacity", self.notification_opacity);
 
@@ -2142,6 +2223,8 @@ impl SimpleComponent for ThemeBuilderModel {
                 self.tint_intensity = 5.0;
                 self.dash_opacity = 70.0;
                 self.overview_blur = true;
+                self.sidebar_opacity = 1.0;
+                self.sidebar_fg_override = String::new();
 
                 let _ = self.apply_uc.reset();
                 let _ = sender
@@ -2187,6 +2270,17 @@ impl ThemeBuilderModel {
                 combo_inset: self.combo_inset,
             },
             foreground: gnomex_domain::ForegroundSpec::default(),
+            sidebar: SidebarSpec {
+                opacity: Opacity::from_fraction(self.sidebar_opacity)?,
+                fg_override: {
+                    let trimmed = self.sidebar_fg_override.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(HexColor::new(trimmed)?)
+                    }
+                },
+            },
             status_colors: gnomex_domain::StatusColorSpec::default(),
             notifications: gnomex_domain::NotificationSpec {
                 radius: Radius::new(self.notification_radius)?,
