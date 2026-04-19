@@ -6,7 +6,9 @@ use crate::ports::{
     ShellCustomizer, ShellProxy,
 };
 use crate::AppError;
-use gnomex_domain::{ExperiencePack, ExtensionRef, ExtensionState, ThemeType};
+use gnomex_domain::{
+    ExperiencePack, ExtensionRef, ExtensionState, PackCompatibilityReport, ShellVersion, ThemeType,
+};
 use std::sync::Arc;
 
 /// Use case: snapshot, list, and apply Experience Packs.
@@ -54,6 +56,27 @@ impl PacksUseCase {
     /// Delete a saved pack.
     pub fn delete_pack(&self, id: &str) -> Result<(), AppError> {
         self.pack_storage.delete_pack(id)
+    }
+
+    /// Classify the version-drift between a pack and a target shell
+    /// version. Callers should present the report to the user (or at
+    /// least log it) before calling [`apply_pack`]. Actual apply is
+    /// still safe when warnings are present — the adapter will
+    /// log-and-skip each unsupported tweak — but users deserve to
+    /// know ahead of time which parts of the pack won't survive.
+    ///
+    /// Resolves GXF-060.
+    pub fn check_compatibility(
+        &self,
+        id: &str,
+        target_version: &ShellVersion,
+    ) -> Result<PackCompatibilityReport, AppError> {
+        let pack = self.pack_storage.load_pack(id)?;
+        Ok(PackCompatibilityReport::build(
+            &pack.shell_version,
+            target_version,
+            &pack.shell_tweaks,
+        ))
     }
 
     /// Export a pack as a portable archive with an optional screenshot.
@@ -175,6 +198,32 @@ impl PacksUseCase {
     /// will be downloaded and installed first.
     pub async fn apply_pack(&self, id: &str) -> Result<(), AppError> {
         let pack = self.pack_storage.load_pack(id)?;
+
+        // Log a compatibility breadcrumb even if the caller didn't
+        // call `check_compatibility` first. The apply itself stays
+        // best-effort — the shell customizer logs-and-skips each
+        // unsupported tweak — but this gives postmortem-style
+        // visibility when things render unexpectedly.
+        let target_version = self.shell.get_shell_version().await.ok();
+        if let Some(target) = &target_version {
+            let report = PackCompatibilityReport::build(
+                &pack.shell_version,
+                target,
+                &pack.shell_tweaks,
+            );
+            if report.has_warnings() {
+                tracing::warn!(
+                    "pack '{}' applied to {} but was built on {} — {} compatibility warning(s)",
+                    pack.id,
+                    target,
+                    pack.shell_version,
+                    report.warnings.len()
+                );
+                for w in &report.warnings {
+                    tracing::warn!("  {}", w.summary());
+                }
+            }
+        }
 
         // Apply GTK theme
         if let Some(ref t) = pack.gtk_theme {
@@ -427,6 +476,44 @@ mod tests {
 
         let loaded = uc.load_pack("target").unwrap();
         assert_eq!(loaded.id, pack.id);
+    }
+
+    #[test]
+    fn check_compatibility_reports_unsupported_when_downgrading() {
+        // Pack saved on GNOME 47 with AppsGridColumns — apply target
+        // GNOME 45 where that tweak is Unsupported. Report should
+        // surface one Unsupported warning.
+        let mut pack = sample_pack("cross-version");
+        pack.shell_version = ShellVersion::new(47, 0);
+        pack.shell_tweaks = vec![ShellTweak {
+            id: ShellTweakId::AppsGridColumns,
+            value: TweakValue::Int(6),
+        }];
+
+        let storage = MockPackStorage::with_loadable(vec![pack]);
+        let customizer = MockShellCustomizer::new(vec![]);
+        let app_settings = MockAppSettings::new();
+        let uc = build(storage, customizer, app_settings);
+
+        let report = uc
+            .check_compatibility("cross-version", &ShellVersion::new(45, 0))
+            .unwrap();
+        assert!(report.severity.is_major_drift());
+        assert_eq!(report.warnings.len(), 1);
+    }
+
+    #[test]
+    fn check_compatibility_on_matching_version_is_clean() {
+        let pack = sample_pack("same-version");
+        let storage = MockPackStorage::with_loadable(vec![pack]);
+        let customizer = MockShellCustomizer::new(vec![]);
+        let app_settings = MockAppSettings::new();
+        let uc = build(storage, customizer, app_settings);
+
+        let report = uc
+            .check_compatibility("same-version", &ShellVersion::new(47, 0))
+            .unwrap();
+        assert!(report.is_clean());
     }
 
     #[test]
