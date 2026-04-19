@@ -156,13 +156,12 @@ schema) must be placed manually or via `install.sh`.
 
 ### Flatpak
 
-A Flatpak manifest is provided at `build-aux/flatpak/io.github.gnomex.GnomeX.json`.
-To build locally with `flatpak-builder`:
-
-```sh
-flatpak-builder --user --install --force-clean \
-    build-dir build-aux/flatpak/io.github.gnomex.GnomeX.json
-```
+**Not supported.** GNOME X needs host-level access to write GTK overrides,
+shell themes, and install a systemd user service, which the Flatpak sandbox
+does not permit without sweeping permissions that defeat the sandbox. Use the
+`.deb`/`.rpm` packages or `install.sh` instead. See
+[Known limitations](docs/known-limitations.md#flatpak-is-not-a-supported-distribution-target)
+for the full rationale.
 
 ## Experience Packs
 
@@ -228,16 +227,14 @@ gnome-x/
     io.github.gnomex.GnomeX.metainfo.xml.in
     icons/                           Hicolor icon theme
     resources/                       GResource bundle (CSS)
-  build-aux/
-    flatpak/                         Flatpak build manifest
   install.sh                         System install script
 ```
 
 ## Known limitations
 
 Some rendering concerns live below GNOME X's theming and GSettings
-surface (HiDPI/fractional-scaling blurriness, Flatpak sandbox
-visibility, browser theming fidelity, GDM login-screen theming). The
+surface (HiDPI/fractional-scaling blurriness, browser theming
+fidelity, GDM login-screen theming). The
 [Known limitations](docs/known-limitations.md) document explains the
 causes, mitigations, and which tracker items track further work.
 

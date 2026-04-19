@@ -94,17 +94,44 @@ for the plan to support GDM via polkit-elevated writes.
 
 ---
 
-## Flatpak sandbox visibility
+## Flatpak is not a supported distribution target
 
-Flatpak apps run with a restricted filesystem view and don't see
-`~/.local/share/themes/` by default. Themes installed by GNOME X will
-not show up inside the flatpak'd app until one of:
+GNOME X is **not published as a Flatpak** and there are no plans to
+do so. The reasons are structural, not cosmetic:
 
-- `flatpak override --filesystem=~/.local/share/themes` is run (we
-  plan to automate this — see
-  [GXF-011](https://github.com/leechristophermurray/gnome-x/issues/6))
-- The theme is also copied to `~/.themes/` (the legacy path, which
-  flatpak reads by default)
+- **Host-level writes.** GNOME X writes GTK CSS overrides to
+  `~/.config/gtk-4.0/gtk.css` and `~/.config/gtk-3.0/gtk.css`, shell
+  themes to `~/.local/share/themes/<Name>/gnome-shell/`, and icons
+  to `~/.local/share/icons/`. The Flatpak sandbox blocks these paths
+  by default; exposing them requires `--filesystem=home` (or
+  near-equivalents), which defeats the point of the sandbox.
+- **systemd user service install.** The theme-sync service is
+  installed as a user unit under `~/.config/systemd/user/` and
+  started through the user systemd bus. Flatpak does not expose
+  host systemd, so this path stops working without additional
+  portal holes that don't exist today.
+- **Theme visibility inside other Flatpaks.** Even if GNOME X ran
+  inside a sandbox, themes it wrote would not be visible to
+  *other* Flatpak'd apps unless each of those apps had
+  `--filesystem=~/.local/share/themes` overridden. That's not
+  something GNOME X can do from inside its own sandbox.
+- **D-Bus reach.** Managing extensions via
+  `org.gnome.Shell.Extensions` requires unconditional access to
+  the session bus name, which again requires loosening the
+  sandbox to the point where it adds no safety.
+
+Together these mean a Flatpak build of GNOME X would either be
+**broken** (missing features) or **effectively unsandboxed**
+(`--filesystem=home`, full session bus, systemd portal). Neither is
+a useful product.
+
+**Use one of these instead:**
+
+- `.deb` / `.rpm` packages from the
+  [Releases page](https://github.com/leechristophermurray/gnome-x/releases)
+- `install.sh` from a source checkout (see
+  [Installing](../README.md#installing) in the README)
+- `cargo install --path crates/ui` for the binary only
 
 ---
 
