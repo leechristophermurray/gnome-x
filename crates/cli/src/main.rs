@@ -13,8 +13,9 @@ use gio::prelude::*;
 use gnomex_app::ports::{ShellCustomizer, ShellProxy};
 use gnomex_app::use_cases::{ApplyThemeUseCase, CustomizeShellUseCase, PacksUseCase};
 use gnomex_domain::{
-    DashSpec, ForegroundSpec, HeaderbarSpec, HexColor, InsetSpec, NotificationSpec, Opacity,
-    PanelSpec, Radius, SidebarSpec, StatusColorSpec, ThemeSpec, TintSpec, WindowFrameSpec,
+    DashSpec, ForegroundSpec, HeaderbarSpec, HexColor, InsetSpec, LayerSeparationSpec,
+    NotificationSpec, Opacity, PanelSpec, Radius, SidebarSpec, StatusColorSpec, ThemeSpec,
+    TintSpec, WindowFrameSpec,
 };
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
@@ -344,6 +345,11 @@ fn build_spec_from_gsettings() -> Result<ThemeSpec> {
             combo_inset: app.boolean("tb-combo-inset"),
         },
         foreground: ForegroundSpec::default(),
+        layers: LayerSeparationSpec {
+            headerbar_bottom: Radius::new(app.double("tb-layer-headerbar-bottom"))?,
+            sidebar_divider: Radius::new(app.double("tb-layer-sidebar-divider"))?,
+            content_contrast: Opacity::from_fraction(app.double("tb-layer-content-contrast"))?,
+        },
         sidebar: SidebarSpec {
             opacity: Opacity::from_fraction(app.double("tb-sidebar-opacity"))?,
             fg_override: {

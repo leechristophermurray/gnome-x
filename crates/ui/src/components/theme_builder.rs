@@ -10,7 +10,10 @@ use crate::services::AppServices;
 use adw::prelude::*;
 use gnomex_app::use_cases::ApplyThemeUseCase;
 use gnomex_domain::theme_capability::{self, ThemeControlId};
-use gnomex_domain::{DashSpec, HexColor, Opacity, PanelSpec, Radius, SidebarSpec, ThemeSpec, TintSpec};
+use gnomex_domain::{
+    DashSpec, HexColor, LayerSeparationSpec, Opacity, PanelSpec, Radius, SidebarSpec, ThemeSpec,
+    TintSpec,
+};
 use relm4::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -58,6 +61,10 @@ pub struct ThemeBuilderModel {
     // Sidebar (Nautilus/Files/Disks left-nav)
     sidebar_opacity: f64,
     sidebar_fg_override: String,
+    // Layer separation (headerbar / sidebar / content boundaries)
+    layer_headerbar_bottom: f64,
+    layer_sidebar_divider: f64,
+    layer_content_contrast: f64,
     // Notification
     notification_radius: f64,
     notification_opacity: f64,
@@ -128,6 +135,10 @@ pub enum ThemeBuilderMsg {
     // Sidebar
     SetSidebarOpacity(f64),
     SetSidebarFgOverride(String),
+    // Layer separation
+    SetLayerHeaderbarBottom(f64),
+    SetLayerSidebarDivider(f64),
+    SetLayerContentContrast(f64),
     // Notifications
     SetNotificationRadius(f64),
     SetNotificationOpacity(f64),
@@ -1332,6 +1343,64 @@ impl SimpleComponent for ThemeBuilderModel {
         sidebar_fg_row.add_suffix(&sidebar_fg_reset);
         sidebar_group.add(&sidebar_fg_row);
 
+        // === Layer Separation (headerbar / sidebar / content) ===
+        let layer_group = adw::PreferencesGroup::builder()
+            .title("Layer Separation")
+            .description(
+                "Make the boundaries between headerbar, sidebar, and content \
+                 visible. Libadwaita defaults blend all three; dial these up \
+                 if you prefer a more traditional desktop silhouette.",
+            )
+            .build();
+
+        let layer_hb_row = build_spin_row(
+            "Headerbar Bottom Border",
+            "Line under the headerbar separating it from content (0 = flush)",
+            0.0,
+            4.0,
+            app_settings.double("tb-layer-headerbar-bottom"),
+            1.0,
+        );
+        {
+            let sender = sender.clone();
+            layer_hb_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetLayerHeaderbarBottom(row.value()));
+            });
+        }
+        layer_group.add(&layer_hb_row);
+
+        let layer_sb_row = build_spin_row(
+            "Sidebar Divider",
+            "Vertical rule between sidebar and content column (0 = blended)",
+            0.0,
+            4.0,
+            app_settings.double("tb-layer-sidebar-divider"),
+            1.0,
+        );
+        {
+            let sender = sender.clone();
+            layer_sb_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetLayerSidebarDivider(row.value()));
+            });
+        }
+        layer_group.add(&layer_sb_row);
+
+        let layer_cc_row = build_spin_row(
+            "Content Contrast",
+            "Extra contrast applied to the content backdrop (0\u{2013}100%)",
+            0.0,
+            100.0,
+            app_settings.double("tb-layer-content-contrast") * 100.0,
+            5.0,
+        );
+        {
+            let sender = sender.clone();
+            layer_cc_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetLayerContentContrast(row.value() / 100.0));
+            });
+        }
+        layer_group.add(&layer_cc_row);
+
         // appended in final ordering
 
         // === Window Behavior (Mutter) ===
@@ -1476,7 +1545,7 @@ impl SimpleComponent for ThemeBuilderModel {
             &[&accent_group, &tint_group, &shared_group, &panel_group, &dash_group, &notif_group, &scheme_group],
         );
         let windows_page = build_category_page(
-            &[&radii_group, &csd_group, &inset_group, &sidebar_group, &window_group, &wm_group],
+            &[&radii_group, &csd_group, &inset_group, &sidebar_group, &layer_group, &window_group, &wm_group],
         );
         let typography_page = build_category_page(
             &[&font_group, &cursor_group],
@@ -1619,6 +1688,9 @@ impl SimpleComponent for ThemeBuilderModel {
             combo_inset: app_settings.boolean("tb-combo-inset"),
             sidebar_opacity: app_settings.double("tb-sidebar-opacity"),
             sidebar_fg_override: app_settings.string("tb-sidebar-fg-override").to_string(),
+            layer_headerbar_bottom: app_settings.double("tb-layer-headerbar-bottom"),
+            layer_sidebar_divider: app_settings.double("tb-layer-sidebar-divider"),
+            layer_content_contrast: app_settings.double("tb-layer-content-contrast"),
             notification_radius: app_settings.double("tb-notification-radius"),
             notification_opacity: app_settings.double("tb-notification-opacity"),
             scheduled_accent_enabled: saved_sched_enabled,
@@ -2032,6 +2104,10 @@ impl SimpleComponent for ThemeBuilderModel {
             // --- Sidebar ---
             ThemeBuilderMsg::SetSidebarOpacity(v) => self.sidebar_opacity = v,
             ThemeBuilderMsg::SetSidebarFgOverride(v) => self.sidebar_fg_override = v,
+            // --- Layer separation ---
+            ThemeBuilderMsg::SetLayerHeaderbarBottom(v) => self.layer_headerbar_bottom = v,
+            ThemeBuilderMsg::SetLayerSidebarDivider(v) => self.layer_sidebar_divider = v,
+            ThemeBuilderMsg::SetLayerContentContrast(v) => self.layer_content_contrast = v,
             // --- Notifications ---
             ThemeBuilderMsg::SetNotificationRadius(v) => self.notification_radius = v,
             ThemeBuilderMsg::SetNotificationOpacity(v) => self.notification_opacity = v,
@@ -2191,6 +2267,9 @@ impl SimpleComponent for ThemeBuilderModel {
                 let _ = app.set_boolean("tb-combo-inset", self.combo_inset);
                 let _ = app.set_double("tb-sidebar-opacity", self.sidebar_opacity);
                 let _ = app.set_string("tb-sidebar-fg-override", &self.sidebar_fg_override);
+                let _ = app.set_double("tb-layer-headerbar-bottom", self.layer_headerbar_bottom);
+                let _ = app.set_double("tb-layer-sidebar-divider", self.layer_sidebar_divider);
+                let _ = app.set_double("tb-layer-content-contrast", self.layer_content_contrast);
                 let _ = app.set_double("tb-notification-radius", self.notification_radius);
                 let _ = app.set_double("tb-notification-opacity", self.notification_opacity);
 
@@ -2225,6 +2304,9 @@ impl SimpleComponent for ThemeBuilderModel {
                 self.overview_blur = true;
                 self.sidebar_opacity = 1.0;
                 self.sidebar_fg_override = String::new();
+                self.layer_headerbar_bottom = 0.0;
+                self.layer_sidebar_divider = 0.0;
+                self.layer_content_contrast = 0.0;
 
                 let _ = self.apply_uc.reset();
                 let _ = sender
@@ -2270,6 +2352,11 @@ impl ThemeBuilderModel {
                 combo_inset: self.combo_inset,
             },
             foreground: gnomex_domain::ForegroundSpec::default(),
+            layers: LayerSeparationSpec {
+                headerbar_bottom: Radius::new(self.layer_headerbar_bottom)?,
+                sidebar_divider: Radius::new(self.layer_sidebar_divider)?,
+                content_contrast: Opacity::from_fraction(self.layer_content_contrast)?,
+            },
             sidebar: SidebarSpec {
                 opacity: Opacity::from_fraction(self.sidebar_opacity)?,
                 fg_override: {
