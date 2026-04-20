@@ -242,6 +242,37 @@ impl SimpleComponent for ThemeBuilderModel {
         );
         // version_banner appended in final ordering below
 
+        // === Theming conflicts banner ===
+        // Scan once at init; surface any detected conflicts as warning
+        // rows so the user knows an extension / legacy setting /
+        // hand-edited CSS is fighting the theme builder.
+        let conflicts = services.conflict_detector.detect();
+        let conflicts_group = if conflicts.is_empty() {
+            None
+        } else {
+            let g = adw::PreferencesGroup::builder()
+                .title("Theming Conflicts")
+                .description(
+                    "Another tool is writing appearance settings that may override \
+                     what GNOME X applies. Reviewing these is optional; your theme \
+                     will still apply, just possibly layered with the other tool's \
+                     output.",
+                )
+                .build();
+            for report in &conflicts {
+                let row = adw::ActionRow::builder()
+                    .title(report.kind.source_label())
+                    .subtitle(format!("{}\n\n{}", report.description, report.recommendation))
+                    .css_classes(["warning"])
+                    .build();
+                let icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+                icon.add_css_class("warning");
+                row.add_prefix(&icon);
+                g.add(&row);
+            }
+            Some(g)
+        };
+
         // === Unified Accent Color section ===
         // Dynamically shows single or day/night pickers based on schedule toggle.
         let accent_group = adw::PreferencesGroup::builder()
@@ -1843,6 +1874,9 @@ impl SimpleComponent for ThemeBuilderModel {
             .width_request(180)
             .build();
         sidebar_box.append(&version_banner);
+        if let Some(ref g) = conflicts_group {
+            sidebar_box.append(g);
+        }
         sidebar_box.append(&sidebar_list);
 
         category_stack.set_hexpand(true);

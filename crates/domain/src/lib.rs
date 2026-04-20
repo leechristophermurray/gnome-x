@@ -17,6 +17,7 @@ mod shell_version;
 mod theme;
 pub mod theme_capability;
 mod theme_spec;
+mod theming_conflict;
 
 pub use error::*;
 pub use extension::*;
@@ -27,3 +28,4 @@ pub use shell_tweak::*;
 pub use shell_version::*;
 pub use theme::*;
 pub use theme_spec::*;
+pub use theming_conflict::*;

@@ -21,6 +21,7 @@ pub mod shell_customizer;
 pub mod theme_css;
 pub mod theme_paths;
 mod theme_writer;
+mod theming_conflict_detector;
 mod vscode_themer;
 
 pub use blur_my_shell::GSettingsBlurMyShell;
@@ -34,4 +35,5 @@ pub use gsettings_appearance::GSettingsAppearance;
 pub use ocs_client::OcsClient;
 pub use pack_toml_storage::PackTomlStorage;
 pub use theme_writer::FilesystemThemeWriter;
+pub use theming_conflict_detector::GioThemingConflictDetector;
 pub use vscode_themer::VscodeThemer;
