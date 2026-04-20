@@ -272,6 +272,53 @@ pub fn gtk_layer_separation_css(spec: &ThemeSpec) -> String {
     out
 }
 
+/// Generate per-widget, per-scheme `@define-color` overrides that
+/// supersede the accent-tinted defaults emitted by `gtk_tint_css`.
+///
+/// Must be concatenated AFTER `gtk_tint_css` — `@define-color` is
+/// last-wins, so a later redefinition beats the accent mix.
+///
+/// Emits an empty string when no override is set, so default themes
+/// pay zero bytes.
+pub fn gtk_widget_color_overrides_css(spec: &ThemeSpec) -> String {
+    let w = &spec.widget_colors;
+    if w.is_empty() {
+        return String::new();
+    }
+
+    let mut light = String::new();
+    let mut dark = String::new();
+
+    fn push(scope: &mut String, token: &str, v: &Option<HexColor>) {
+        if let Some(c) = v {
+            scope.push_str(&format!("    @define-color {token} {};\n", c.as_str()));
+        }
+    }
+
+    push(&mut light, "button_bg_color", &w.button_bg_light);
+    push(&mut light, "entry_bg_color", &w.entry_bg_light);
+    push(&mut light, "headerbar_bg_color", &w.headerbar_bg_light);
+    push(&mut light, "sidebar_bg_color", &w.sidebar_bg_light);
+
+    push(&mut dark, "button_bg_color", &w.button_bg_dark);
+    push(&mut dark, "entry_bg_color", &w.entry_bg_dark);
+    push(&mut dark, "headerbar_bg_color", &w.headerbar_bg_dark);
+    push(&mut dark, "sidebar_bg_color", &w.sidebar_bg_dark);
+
+    let mut out = String::from("/* Per-widget colour overrides */\n");
+    if !light.is_empty() {
+        out.push_str("@media (prefers-color-scheme: light) {\n");
+        out.push_str(&light);
+        out.push_str("}\n");
+    }
+    if !dark.is_empty() {
+        out.push_str("@media (prefers-color-scheme: dark) {\n");
+        out.push_str(&dark);
+        out.push_str("}\n");
+    }
+    out
+}
+
 /// Generate CSS for foreground/text and semantic status color overrides.
 pub fn gtk_color_overrides_css(spec: &ThemeSpec) -> String {
     let mut css = String::new();

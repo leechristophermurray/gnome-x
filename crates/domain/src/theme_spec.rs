@@ -230,6 +230,37 @@ impl Default for SidebarSpec {
     }
 }
 
+/// Per-widget, per-scheme background-colour overrides.
+///
+/// Each field is scoped by `@media (prefers-color-scheme: ...)` so the
+/// user can, for example, dial a warm orange button in light mode and
+/// a cool blue button in dark mode. `None` means "follow the current
+/// Adwaita / tinting behaviour unchanged".
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct WidgetColorOverrides {
+    pub button_bg_light: Option<HexColor>,
+    pub button_bg_dark: Option<HexColor>,
+    pub entry_bg_light: Option<HexColor>,
+    pub entry_bg_dark: Option<HexColor>,
+    pub headerbar_bg_light: Option<HexColor>,
+    pub headerbar_bg_dark: Option<HexColor>,
+    pub sidebar_bg_light: Option<HexColor>,
+    pub sidebar_bg_dark: Option<HexColor>,
+}
+
+impl WidgetColorOverrides {
+    pub fn is_empty(&self) -> bool {
+        self.button_bg_light.is_none()
+            && self.button_bg_dark.is_none()
+            && self.entry_bg_light.is_none()
+            && self.entry_bg_dark.is_none()
+            && self.headerbar_bg_light.is_none()
+            && self.headerbar_bg_dark.is_none()
+            && self.sidebar_bg_light.is_none()
+            && self.sidebar_bg_dark.is_none()
+    }
+}
+
 /// Semantic status color overrides (None = use Adwaita defaults).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct StatusColorSpec {
@@ -265,6 +296,7 @@ pub struct ThemeSpec {
     pub sidebar: SidebarSpec,
     pub layers: LayerSeparationSpec,
     pub widget_style: WidgetStyleSpec,
+    pub widget_colors: WidgetColorOverrides,
     pub status_colors: StatusColorSpec,
     pub notifications: NotificationSpec,
     pub overview_blur: bool,
@@ -306,6 +338,7 @@ impl ThemeSpec {
             sidebar: SidebarSpec::default(),
             layers: LayerSeparationSpec::default(),
             widget_style: WidgetStyleSpec::default(),
+            widget_colors: WidgetColorOverrides::default(),
             status_colors: StatusColorSpec::default(),
             notifications: NotificationSpec {
                 radius: Radius(12.0),
