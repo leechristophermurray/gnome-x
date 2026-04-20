@@ -140,6 +140,59 @@ separator {{ opacity: {sep_opacity}; }}
     )
 }
 
+/// Generate CSS for explicit headerbar/sidebar/content layer separation.
+///
+/// Output is empty when all three knobs are at their defaults (0), so
+/// a user who hasn't opted in pays no bytes and gets no behaviour change.
+pub fn gtk_layer_separation_css(spec: &ThemeSpec) -> String {
+    let hb = spec.layers.headerbar_bottom.as_i32();
+    let sb = spec.layers.sidebar_divider.as_i32();
+    let cc = spec.layers.content_contrast.as_fraction();
+
+    if hb == 0 && sb == 0 && cc <= f64::EPSILON {
+        return String::new();
+    }
+
+    let mut out = String::from("/* Layer separation */\n");
+
+    if hb > 0 {
+        out.push_str(&format!(
+            "headerbar {{ border-bottom: {hb}px solid @borders; }}\n\
+             headerbar.flat {{ border-bottom: {hb}px solid @borders; }}\n",
+        ));
+    }
+
+    if sb > 0 {
+        // Both the Libadwaita split-view divider and the raw
+        // `.navigation-sidebar` / `.sidebar-pane` classes used by
+        // Nautilus, Files, Disks, Settings, etc.
+        out.push_str(&format!(
+            ".sidebar-pane, .navigation-sidebar {{ border-right: {sb}px solid @borders; }}\n\
+             splitview > contents > .sidebar-pane {{ border-right: {sb}px solid @borders; }}\n",
+        ));
+    }
+
+    if cc > f64::EPSILON {
+        // Push the content surface away from the window background by
+        // layering a subtle tint. Light mode darkens, dark mode lightens,
+        // so the content column always reads as "in front of" the chrome.
+        out.push_str(&format!(
+            "@media (prefers-color-scheme: light) {{\n\
+             \x20   .content-pane, .view, list.content, splitview > contents > .content-pane {{\n\
+             \x20       background-color: mix(@view_bg_color, black, {cc:.3});\n\
+             \x20   }}\n\
+             }}\n\
+             @media (prefers-color-scheme: dark) {{\n\
+             \x20   .content-pane, .view, list.content, splitview > contents > .content-pane {{\n\
+             \x20       background-color: mix(@view_bg_color, white, {cc:.3});\n\
+             \x20   }}\n\
+             }}\n",
+        ));
+    }
+
+    out
+}
+
 /// Generate CSS for foreground/text and semantic status color overrides.
 pub fn gtk_color_overrides_css(spec: &ThemeSpec) -> String {
     let mut css = String::new();

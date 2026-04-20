@@ -144,6 +144,38 @@ pub struct ForegroundSpec {
     pub headerbar_border: Option<HexColor>,
 }
 
+/// Explicit visual separators between the three major layers of a
+/// Libadwaita window — headerbar / sidebar / content.
+///
+/// Modern Adwaita blends all three into a single flat surface; users
+/// who want a more "traditional" desktop silhouette need to be able
+/// to dial in visible boundary lines without editing CSS by hand.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerSeparationSpec {
+    /// Width of the line drawn under the headerbar (0 = flush/blended,
+    /// Libadwaita default). Rendered in `@borders` / `@headerbar_border_color`.
+    pub headerbar_bottom: Radius,
+    /// Width of the vertical rule between the sidebar and the main
+    /// content column (0 = blended). Rendered in `@borders`.
+    pub sidebar_divider: Radius,
+    /// Extra strength for the content-view backdrop contrast
+    /// (0.0 = match Adwaita defaults, 1.0 = maximally darkened/lightened
+    /// relative to the window background). Exposed as a separate knob
+    /// from the global `TintSpec::intensity` so the user can sharpen
+    /// layer boundaries without re-tinting every other surface.
+    pub content_contrast: Opacity,
+}
+
+impl Default for LayerSeparationSpec {
+    fn default() -> Self {
+        Self {
+            headerbar_bottom: Radius(0.0),
+            sidebar_divider: Radius(0.0),
+            content_contrast: Opacity(0.0),
+        }
+    }
+}
+
 /// Sidebar-specific controls. Nautilus, Files, Disks, Settings, and any
 /// AdwOverlaySplitView app render a left nav sidebar; this spec groups
 /// the knobs that govern it.
@@ -200,6 +232,7 @@ pub struct ThemeSpec {
     pub insets: InsetSpec,
     pub foreground: ForegroundSpec,
     pub sidebar: SidebarSpec,
+    pub layers: LayerSeparationSpec,
     pub status_colors: StatusColorSpec,
     pub notifications: NotificationSpec,
     pub overview_blur: bool,
@@ -239,6 +272,7 @@ impl ThemeSpec {
             },
             foreground: ForegroundSpec::default(),
             sidebar: SidebarSpec::default(),
+            layers: LayerSeparationSpec::default(),
             status_colors: StatusColorSpec::default(),
             notifications: NotificationSpec {
                 radius: Radius(12.0),

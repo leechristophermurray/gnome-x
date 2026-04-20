@@ -124,6 +124,21 @@
       <default>true</default>
       <summary>Show combo button inset border</summary>
     </key>
+    <key name="tb-layer-headerbar-bottom" type="d">
+      <default>0.0</default>
+      <summary>Headerbar bottom-border width (px)</summary>
+      <description>Thickness of the horizontal rule drawn under the headerbar, rendered in the Adwaita @borders colour. 0 = Libadwaita default (flush).</description>
+    </key>
+    <key name="tb-layer-sidebar-divider" type="d">
+      <default>0.0</default>
+      <summary>Sidebar divider width (px)</summary>
+      <description>Thickness of the vertical rule between the sidebar and the main content area. 0 = Libadwaita default (blended).</description>
+    </key>
+    <key name="tb-layer-content-contrast" type="d">
+      <default>0.0</default>
+      <summary>Content-pane contrast fraction</summary>
+      <description>Extra contrast applied to the content backdrop to visually separate it from the chrome. 0.0 = no change, 1.0 = maximum.</description>
+    </key>
     <key name="tb-sidebar-opacity" type="d">
       <default>1.0</default>
       <summary>Sidebar background opacity fraction</summary>
