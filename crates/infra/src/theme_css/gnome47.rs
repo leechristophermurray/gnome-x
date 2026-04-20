@@ -7,7 +7,7 @@
 
 use super::common::{
     gtk_csd_css, gtk_color_overrides_css, gtk_layer_separation_css, gtk_radius_css, gtk_tint_css,
-    shell_notification_css, tint_shell_surfaces,
+    gtk_widget_style_css, shell_notification_css, tint_shell_surfaces,
 };
 use gnomex_app::ports::{ThemeCss, ThemeCssGenerator};
 use gnomex_app::AppError;
@@ -31,10 +31,11 @@ impl ThemeCssGenerator for Gnome47CssGenerator {
 impl Gnome47CssGenerator {
     fn gtk(&self, spec: &ThemeSpec) -> String {
         format!(
-            "/* GNOME X — GTK4 overrides (GNOME 47+) */\n\n{}\n{}\n{}\n{}\n{}",
+            "/* GNOME X — GTK4 overrides (GNOME 47+) */\n\n{}\n{}\n{}\n{}\n{}\n{}",
             gtk_radius_css(spec),
             gtk_csd_css(spec),
             gtk_layer_separation_css(spec),
+            gtk_widget_style_css(spec),
             gtk_color_overrides_css(spec),
             gtk_tint_css(spec),
         )

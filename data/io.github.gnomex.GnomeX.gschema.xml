@@ -124,6 +124,21 @@
       <default>true</default>
       <summary>Show combo button inset border</summary>
     </key>
+    <key name="tb-widget-input-inset" type="d">
+      <default>0.0</default>
+      <summary>Input-field inset intensity</summary>
+      <description>0.0 = Adwaita-flat inputs. Higher values give entries a visible background and border so they read as clearly depressed.</description>
+    </key>
+    <key name="tb-widget-button-raise" type="d">
+      <default>0.0</default>
+      <summary>Button-affordance raise intensity</summary>
+      <description>0.0 = Adwaita-flat buttons. Higher values give non-flat, non-suggested buttons a border and shadow so they read as pressable.</description>
+    </key>
+    <key name="tb-widget-headerbar-gradient" type="d">
+      <default>0.0</default>
+      <summary>Headerbar gradient intensity</summary>
+      <description>0.0 = flat Adwaita headerbar. Higher values apply a subtle top-to-bottom gradient. Conflicts with Adwaita's flat philosophy; use sparingly.</description>
+    </key>
     <key name="tb-layer-headerbar-bottom" type="d">
       <default>0.0</default>
       <summary>Headerbar bottom-border width (px)</summary>
