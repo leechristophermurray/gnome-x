@@ -56,7 +56,10 @@ turning 30-minute tutorials into 1-click installs.
 
 ## Screenshots
 
-> *Screenshots will be added after the first public release.*
+![GNOME X](docs/assets/screenshots/first-run-launch.png)
+![GNOME X](docs/assets/screenshots/tut-extensions-01-explore.png)
+![GNOME X](docs/assets/screenshots/hero-explore.png)
+![GNOME X](docs/assets/screenshots/tut-widget-colors-02-light-dark.png)
 
 ## Architecture
 
