@@ -144,6 +144,37 @@ pub struct ForegroundSpec {
     pub headerbar_border: Option<HexColor>,
 }
 
+/// "Restore traditional widget styling" opt-ins. Modern Adwaita draws
+/// flat, chromeless inputs, buttons, and headerbars. Users coming from
+/// GNOME 3.x / pre-Libadwaita desktops often want some of that chrome
+/// back. Each knob is a 0.0–1.0 intensity; 0.0 emits no CSS (byte-
+/// identical to current output) and higher values scale the effect.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WidgetStyleSpec {
+    /// Inset strength for input fields. Above 0, `entry` widgets gain
+    /// a visible background and border distinct from the surrounding
+    /// surface. At 1.0 inputs read as clearly depressed.
+    pub input_inset: Opacity,
+    /// Raised-button affordance. Above 0, `button` widgets gain a
+    /// subtle border + shadow so they read as pressable rather than
+    /// flat text. At 1.0 buttons look clearly 3-D.
+    pub button_raise: Opacity,
+    /// Headerbar / toolbar gradient intensity. Above 0, a top→bottom
+    /// linear gradient is applied. Conflicts with Adwaita's flat
+    /// philosophy — use sparingly.
+    pub headerbar_gradient: Opacity,
+}
+
+impl Default for WidgetStyleSpec {
+    fn default() -> Self {
+        Self {
+            input_inset: Opacity(0.0),
+            button_raise: Opacity(0.0),
+            headerbar_gradient: Opacity(0.0),
+        }
+    }
+}
+
 /// Explicit visual separators between the three major layers of a
 /// Libadwaita window — headerbar / sidebar / content.
 ///
@@ -233,6 +264,7 @@ pub struct ThemeSpec {
     pub foreground: ForegroundSpec,
     pub sidebar: SidebarSpec,
     pub layers: LayerSeparationSpec,
+    pub widget_style: WidgetStyleSpec,
     pub status_colors: StatusColorSpec,
     pub notifications: NotificationSpec,
     pub overview_blur: bool,
@@ -273,6 +305,7 @@ impl ThemeSpec {
             foreground: ForegroundSpec::default(),
             sidebar: SidebarSpec::default(),
             layers: LayerSeparationSpec::default(),
+            widget_style: WidgetStyleSpec::default(),
             status_colors: StatusColorSpec::default(),
             notifications: NotificationSpec {
                 radius: Radius(12.0),

@@ -140,6 +140,85 @@ separator {{ opacity: {sep_opacity}; }}
     )
 }
 
+/// Generate CSS for "restore traditional widget styling" opt-ins
+/// (inputs, buttons, headerbar gradients). All knobs at 0.0 yields an
+/// empty string so default-spec output stays byte-compatible.
+pub fn gtk_widget_style_css(spec: &ThemeSpec) -> String {
+    let input = spec.widget_style.input_inset.as_fraction();
+    let button = spec.widget_style.button_raise.as_fraction();
+    let gradient = spec.widget_style.headerbar_gradient.as_fraction();
+
+    if input <= f64::EPSILON && button <= f64::EPSILON && gradient <= f64::EPSILON {
+        return String::new();
+    }
+
+    let mut out = String::from("/* Widget style */\n");
+
+    if input > f64::EPSILON {
+        // The inset darkens in light mode (gives the "sunken white
+        // field" look) and lightens in dark mode so the field still
+        // reads as a distinct surface against a dark window.
+        let border_alpha = 0.08 + 0.22 * input;
+        let bg_shift = 0.04 + 0.12 * input;
+        out.push_str(&format!(
+            "@media (prefers-color-scheme: light) {{\n\
+             \x20   entry, entry.flat, spinbutton, spinbutton.flat {{\n\
+             \x20       background-color: mix(@view_bg_color, black, {bg_shift:.3});\n\
+             \x20       border: 1px solid alpha(black, {border_alpha:.3});\n\
+             \x20       box-shadow: inset 0 1px 0 alpha(black, {inset_shadow:.3});\n\
+             \x20   }}\n\
+             }}\n\
+             @media (prefers-color-scheme: dark) {{\n\
+             \x20   entry, entry.flat, spinbutton, spinbutton.flat {{\n\
+             \x20       background-color: mix(@view_bg_color, white, {bg_shift:.3});\n\
+             \x20       border: 1px solid alpha(white, {border_alpha:.3});\n\
+             \x20       box-shadow: inset 0 1px 0 alpha(black, {inset_shadow:.3});\n\
+             \x20   }}\n\
+             }}\n",
+            inset_shadow = 0.10 * input,
+        ));
+    }
+
+    if button > f64::EPSILON {
+        let border_alpha = 0.10 + 0.25 * button;
+        let shadow_alpha = 0.08 + 0.15 * button;
+        out.push_str(&format!(
+            "button:not(.flat):not(.suggested-action):not(.destructive-action) {{\n\
+             \x20   border: 1px solid alpha(currentColor, {border_alpha:.3});\n\
+             \x20   box-shadow: 0 1px 0 alpha(black, {shadow_alpha:.3});\n\
+             }}\n\
+             button:not(.flat):not(.suggested-action):not(.destructive-action):active {{\n\
+             \x20   box-shadow: inset 0 1px 0 alpha(black, {shadow_alpha:.3});\n\
+             }}\n",
+        ));
+    }
+
+    if gradient > f64::EPSILON {
+        // Subtle vertical gradient on headerbars and toolbars. The
+        // delta is capped so even gradient=1.0 stays visually tasteful
+        // rather than Win98-chrome.
+        let delta = 0.03 + 0.06 * gradient;
+        out.push_str(&format!(
+            "@media (prefers-color-scheme: light) {{\n\
+             \x20   headerbar, .toolbar {{\n\
+             \x20       background-image: linear-gradient(to bottom,\n\
+             \x20           @headerbar_bg_color,\n\
+             \x20           mix(@headerbar_bg_color, black, {delta:.3}));\n\
+             \x20   }}\n\
+             }}\n\
+             @media (prefers-color-scheme: dark) {{\n\
+             \x20   headerbar, .toolbar {{\n\
+             \x20       background-image: linear-gradient(to bottom,\n\
+             \x20           mix(@headerbar_bg_color, white, {delta:.3}),\n\
+             \x20           @headerbar_bg_color);\n\
+             \x20   }}\n\
+             }}\n",
+        ));
+    }
+
+    out
+}
+
 /// Generate CSS for explicit headerbar/sidebar/content layer separation.
 ///
 /// Output is empty when all three knobs are at their defaults (0), so

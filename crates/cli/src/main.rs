@@ -15,7 +15,7 @@ use gnomex_app::use_cases::{ApplyThemeUseCase, CustomizeShellUseCase, PacksUseCa
 use gnomex_domain::{
     DashSpec, ForegroundSpec, HeaderbarSpec, HexColor, InsetSpec, LayerSeparationSpec,
     NotificationSpec, Opacity, PanelSpec, Radius, SidebarSpec, StatusColorSpec, ThemeSpec,
-    TintSpec, WindowFrameSpec,
+    TintSpec, WidgetStyleSpec, WindowFrameSpec,
 };
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
@@ -349,6 +349,11 @@ fn build_spec_from_gsettings() -> Result<ThemeSpec> {
             headerbar_bottom: Radius::new(app.double("tb-layer-headerbar-bottom"))?,
             sidebar_divider: Radius::new(app.double("tb-layer-sidebar-divider"))?,
             content_contrast: Opacity::from_fraction(app.double("tb-layer-content-contrast"))?,
+        },
+        widget_style: WidgetStyleSpec {
+            input_inset: Opacity::from_fraction(app.double("tb-widget-input-inset"))?,
+            button_raise: Opacity::from_fraction(app.double("tb-widget-button-raise"))?,
+            headerbar_gradient: Opacity::from_fraction(app.double("tb-widget-headerbar-gradient"))?,
         },
         sidebar: SidebarSpec {
             opacity: Opacity::from_fraction(app.double("tb-sidebar-opacity"))?,

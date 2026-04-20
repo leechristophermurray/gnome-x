@@ -12,7 +12,7 @@ use gnomex_app::use_cases::ApplyThemeUseCase;
 use gnomex_domain::theme_capability::{self, ThemeControlId};
 use gnomex_domain::{
     DashSpec, HexColor, LayerSeparationSpec, Opacity, PanelSpec, Radius, SidebarSpec, ThemeSpec,
-    TintSpec,
+    TintSpec, WidgetStyleSpec,
 };
 use relm4::prelude::*;
 use std::collections::HashMap;
@@ -65,6 +65,10 @@ pub struct ThemeBuilderModel {
     layer_headerbar_bottom: f64,
     layer_sidebar_divider: f64,
     layer_content_contrast: f64,
+    // Widget style (traditional-look opt-ins)
+    widget_input_inset: f64,
+    widget_button_raise: f64,
+    widget_headerbar_gradient: f64,
     // Notification
     notification_radius: f64,
     notification_opacity: f64,
@@ -139,6 +143,10 @@ pub enum ThemeBuilderMsg {
     SetLayerHeaderbarBottom(f64),
     SetLayerSidebarDivider(f64),
     SetLayerContentContrast(f64),
+    // Widget style
+    SetWidgetInputInset(f64),
+    SetWidgetButtonRaise(f64),
+    SetWidgetHeaderbarGradient(f64),
     // Notifications
     SetNotificationRadius(f64),
     SetNotificationOpacity(f64),
@@ -1401,6 +1409,64 @@ impl SimpleComponent for ThemeBuilderModel {
         }
         layer_group.add(&layer_cc_row);
 
+        // === Widget Style (traditional-look opt-ins) ===
+        let widget_style_group = adw::PreferencesGroup::builder()
+            .title("Widget Style")
+            .description(
+                "Restore traditional widget affordances. Adwaita defaults to \
+                 flat, chromeless widgets; dial these up if you prefer visible \
+                 buttons, inset inputs, or subtle headerbar gradients.",
+            )
+            .build();
+
+        let widget_input_row = build_spin_row(
+            "Input-Field Inset",
+            "Make entry fields look depressed (0 = flat Adwaita, 100% = strongly inset)",
+            0.0,
+            100.0,
+            app_settings.double("tb-widget-input-inset") * 100.0,
+            5.0,
+        );
+        {
+            let sender = sender.clone();
+            widget_input_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetWidgetInputInset(row.value() / 100.0));
+            });
+        }
+        widget_style_group.add(&widget_input_row);
+
+        let widget_button_row = build_spin_row(
+            "Button Affordance",
+            "Add border + shadow so buttons read as pressable (0 = flat Adwaita, 100% = strongly raised)",
+            0.0,
+            100.0,
+            app_settings.double("tb-widget-button-raise") * 100.0,
+            5.0,
+        );
+        {
+            let sender = sender.clone();
+            widget_button_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetWidgetButtonRaise(row.value() / 100.0));
+            });
+        }
+        widget_style_group.add(&widget_button_row);
+
+        let widget_gradient_row = build_spin_row(
+            "Headerbar Gradient",
+            "Subtle top-to-bottom gradient on headerbars (0 = flat, higher = more pronounced). Conflicts with Adwaita's flat philosophy.",
+            0.0,
+            100.0,
+            app_settings.double("tb-widget-headerbar-gradient") * 100.0,
+            5.0,
+        );
+        {
+            let sender = sender.clone();
+            widget_gradient_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetWidgetHeaderbarGradient(row.value() / 100.0));
+            });
+        }
+        widget_style_group.add(&widget_gradient_row);
+
         // appended in final ordering
 
         // === Window Behavior (Mutter) ===
@@ -1545,7 +1611,7 @@ impl SimpleComponent for ThemeBuilderModel {
             &[&accent_group, &tint_group, &shared_group, &panel_group, &dash_group, &notif_group, &scheme_group],
         );
         let windows_page = build_category_page(
-            &[&radii_group, &csd_group, &inset_group, &sidebar_group, &layer_group, &window_group, &wm_group],
+            &[&radii_group, &csd_group, &inset_group, &sidebar_group, &layer_group, &widget_style_group, &window_group, &wm_group],
         );
         let typography_page = build_category_page(
             &[&font_group, &cursor_group],
@@ -1691,6 +1757,9 @@ impl SimpleComponent for ThemeBuilderModel {
             layer_headerbar_bottom: app_settings.double("tb-layer-headerbar-bottom"),
             layer_sidebar_divider: app_settings.double("tb-layer-sidebar-divider"),
             layer_content_contrast: app_settings.double("tb-layer-content-contrast"),
+            widget_input_inset: app_settings.double("tb-widget-input-inset"),
+            widget_button_raise: app_settings.double("tb-widget-button-raise"),
+            widget_headerbar_gradient: app_settings.double("tb-widget-headerbar-gradient"),
             notification_radius: app_settings.double("tb-notification-radius"),
             notification_opacity: app_settings.double("tb-notification-opacity"),
             scheduled_accent_enabled: saved_sched_enabled,
@@ -2108,6 +2177,10 @@ impl SimpleComponent for ThemeBuilderModel {
             ThemeBuilderMsg::SetLayerHeaderbarBottom(v) => self.layer_headerbar_bottom = v,
             ThemeBuilderMsg::SetLayerSidebarDivider(v) => self.layer_sidebar_divider = v,
             ThemeBuilderMsg::SetLayerContentContrast(v) => self.layer_content_contrast = v,
+            // --- Widget style ---
+            ThemeBuilderMsg::SetWidgetInputInset(v) => self.widget_input_inset = v,
+            ThemeBuilderMsg::SetWidgetButtonRaise(v) => self.widget_button_raise = v,
+            ThemeBuilderMsg::SetWidgetHeaderbarGradient(v) => self.widget_headerbar_gradient = v,
             // --- Notifications ---
             ThemeBuilderMsg::SetNotificationRadius(v) => self.notification_radius = v,
             ThemeBuilderMsg::SetNotificationOpacity(v) => self.notification_opacity = v,
@@ -2270,6 +2343,12 @@ impl SimpleComponent for ThemeBuilderModel {
                 let _ = app.set_double("tb-layer-headerbar-bottom", self.layer_headerbar_bottom);
                 let _ = app.set_double("tb-layer-sidebar-divider", self.layer_sidebar_divider);
                 let _ = app.set_double("tb-layer-content-contrast", self.layer_content_contrast);
+                let _ = app.set_double("tb-widget-input-inset", self.widget_input_inset);
+                let _ = app.set_double("tb-widget-button-raise", self.widget_button_raise);
+                let _ = app.set_double(
+                    "tb-widget-headerbar-gradient",
+                    self.widget_headerbar_gradient,
+                );
                 let _ = app.set_double("tb-notification-radius", self.notification_radius);
                 let _ = app.set_double("tb-notification-opacity", self.notification_opacity);
 
@@ -2307,6 +2386,9 @@ impl SimpleComponent for ThemeBuilderModel {
                 self.layer_headerbar_bottom = 0.0;
                 self.layer_sidebar_divider = 0.0;
                 self.layer_content_contrast = 0.0;
+                self.widget_input_inset = 0.0;
+                self.widget_button_raise = 0.0;
+                self.widget_headerbar_gradient = 0.0;
 
                 let _ = self.apply_uc.reset();
                 let _ = sender
@@ -2356,6 +2438,11 @@ impl ThemeBuilderModel {
                 headerbar_bottom: Radius::new(self.layer_headerbar_bottom)?,
                 sidebar_divider: Radius::new(self.layer_sidebar_divider)?,
                 content_contrast: Opacity::from_fraction(self.layer_content_contrast)?,
+            },
+            widget_style: WidgetStyleSpec {
+                input_inset: Opacity::from_fraction(self.widget_input_inset)?,
+                button_raise: Opacity::from_fraction(self.widget_button_raise)?,
+                headerbar_gradient: Opacity::from_fraction(self.widget_headerbar_gradient)?,
             },
             sidebar: SidebarSpec {
                 opacity: Opacity::from_fraction(self.sidebar_opacity)?,
