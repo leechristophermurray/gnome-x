@@ -19,6 +19,7 @@ mod shell_customizer;
 mod shell_proxy;
 mod theme_css;
 mod theme_writer;
+mod theming_conflict_detector;
 
 pub use app_settings::*;
 pub use appearance_settings::*;
@@ -33,3 +34,4 @@ pub use shell_customizer::*;
 pub use shell_proxy::*;
 pub use theme_css::*;
 pub use theme_writer::*;
+pub use theming_conflict_detector::*;

@@ -7,7 +7,9 @@
 //! the UI layer. It is threaded through component Init params so that
 //! every view can spawn async work on the tokio runtime.
 
-use gnomex_app::ports::{BlurMyShellController, FloatingDockController, ShellCustomizer};
+use gnomex_app::ports::{
+    BlurMyShellController, FloatingDockController, ShellCustomizer, ThemingConflictDetector,
+};
 use gnomex_app::use_cases::{
     ApplyThemeUseCase, BrowseUseCase, CustomizeShellUseCase, CustomizeUseCase, ManageUseCase,
     PacksUseCase,
@@ -15,7 +17,7 @@ use gnomex_app::use_cases::{
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
     GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell, GSettingsFloatingDock,
-    OcsClient, PackTomlStorage, VscodeThemer,
+    GioThemingConflictDetector, OcsClient, PackTomlStorage, VscodeThemer,
 };
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -32,6 +34,7 @@ pub struct AppServices {
     pub customize_shell: Arc<CustomizeShellUseCase>,
     pub floating_dock: Arc<dyn FloatingDockController>,
     pub blur_my_shell: Arc<dyn BlurMyShellController>,
+    pub conflict_detector: Arc<dyn ThemingConflictDetector>,
     pub detected_gnome_version: String,
 }
 
@@ -119,6 +122,9 @@ impl AppServices {
                 .with_external_themer(Arc::new(ChromiumThemer::new())),
         );
 
+        let conflict_detector: Arc<dyn ThemingConflictDetector> =
+            Arc::new(GioThemingConflictDetector::new());
+
         Self {
             handle,
             browse,
@@ -129,6 +135,7 @@ impl AppServices {
             customize_shell,
             floating_dock,
             blur_my_shell,
+            conflict_detector,
             detected_gnome_version,
         }
     }
