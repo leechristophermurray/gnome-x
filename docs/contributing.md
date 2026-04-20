@@ -40,13 +40,20 @@ Before filing: skim
 
 ## Sharing an Experience Pack
 
-If you've built a desktop look you're proud of, share its pack:
+If you've built a desktop look you're proud of, share its pack on
+**[r/GNOME_eXperience](https://www.reddit.com/r/GNOME_eXperience/)** —
+that's the community hub for packs, screenshots, and general
+GNOME-X-customisation discussion. A good post includes:
 
-1. Snapshot it (Packs tab → **Snapshot current desktop**) — see
-   [Build a pack](tutorials/build-a-pack.md).
-2. Export to a `.gnomex-pack.tar.gz`.
-3. Open an issue with the **`pack` label** and attach the file.
-4. Include a screenshot — packs without screenshots get less attention.
+1. A screenshot of the desktop the pack produces.
+2. The exported `.gnomex-pack.tar.gz` (Reddit accepts files up to 20 MB;
+   packs are typically under 100 KB).
+3. A one-line description of the look you were going for.
+4. The list of required extensions from the pack detail view, so readers
+   can see if any of them are deal-breakers.
+
+If the pack exposes a *bug* in GNOME X rather than a look, file a GitHub
+issue instead so it ends up on the tracker.
 
 We don't yet have a curated pack gallery on the site; this is tracked, and
 contributions to its design are welcome.

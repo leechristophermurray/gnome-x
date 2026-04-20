@@ -90,6 +90,16 @@ step.
 | Flatpak         | not supported (intentional)           |
 | Login screen (GDM) | tracked, not yet shipped           |
 
+## Community
+
+- **[r/GNOME_eXperience](https://www.reddit.com/r/GNOME_eXperience/)** — the
+  subreddit for sharing Experience Packs, screenshots of customised
+  desktops, and general discussion. The best place to post a pack you've
+  built for other people to find.
+- **[GitHub issues](https://github.com/leechristophermurray/gnome-x/issues)**
+  — bug reports, feature requests, and architecture discussion. Use this
+  for anything actionable; use the subreddit for anything conversational.
+
 ## Where to go next
 
 - New here? [Install GNOME X](install.md), then read [First run](first-run.md).

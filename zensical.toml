@@ -96,6 +96,11 @@ icon = "fontawesome/brands/github"
 link = "https://github.com/leechristophermurray/gnome-x"
 name = "GNOME X on GitHub"
 
+[[project.extra.social]]
+icon = "fontawesome/brands/reddit"
+link = "https://www.reddit.com/r/GNOME_eXperience/"
+name = "r/GNOME_eXperience on Reddit"
+
 # ----------------------------------------------------------------------------
 # Markdown extensions
 # ----------------------------------------------------------------------------
