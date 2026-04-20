@@ -124,6 +124,39 @@
       <default>true</default>
       <summary>Show combo button inset border</summary>
     </key>
+    <key name="tb-color-button-bg-light" type="s">
+      <default>""</default>
+      <summary>Button background override (light)</summary>
+      <description>Per-scheme override for @button_bg_color under light colour scheme. Empty = no override.</description>
+    </key>
+    <key name="tb-color-button-bg-dark" type="s">
+      <default>""</default>
+      <summary>Button background override (dark)</summary>
+    </key>
+    <key name="tb-color-entry-bg-light" type="s">
+      <default>""</default>
+      <summary>Entry background override (light)</summary>
+    </key>
+    <key name="tb-color-entry-bg-dark" type="s">
+      <default>""</default>
+      <summary>Entry background override (dark)</summary>
+    </key>
+    <key name="tb-color-headerbar-bg-light" type="s">
+      <default>""</default>
+      <summary>Headerbar background override (light)</summary>
+    </key>
+    <key name="tb-color-headerbar-bg-dark" type="s">
+      <default>""</default>
+      <summary>Headerbar background override (dark)</summary>
+    </key>
+    <key name="tb-color-sidebar-bg-light" type="s">
+      <default>""</default>
+      <summary>Sidebar background override (light)</summary>
+    </key>
+    <key name="tb-color-sidebar-bg-dark" type="s">
+      <default>""</default>
+      <summary>Sidebar background override (dark)</summary>
+    </key>
     <key name="tb-widget-input-inset" type="d">
       <default>0.0</default>
       <summary>Input-field inset intensity</summary>

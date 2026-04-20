@@ -12,7 +12,7 @@ use gnomex_app::use_cases::ApplyThemeUseCase;
 use gnomex_domain::theme_capability::{self, ThemeControlId};
 use gnomex_domain::{
     DashSpec, HexColor, LayerSeparationSpec, Opacity, PanelSpec, Radius, SidebarSpec, ThemeSpec,
-    TintSpec, WidgetStyleSpec,
+    TintSpec, WidgetColorOverrides, WidgetStyleSpec,
 };
 use relm4::prelude::*;
 use std::collections::HashMap;
@@ -69,6 +69,15 @@ pub struct ThemeBuilderModel {
     widget_input_inset: f64,
     widget_button_raise: f64,
     widget_headerbar_gradient: f64,
+    // Per-widget, per-scheme background colour overrides (hex strings; "" = none)
+    color_button_bg_light: String,
+    color_button_bg_dark: String,
+    color_entry_bg_light: String,
+    color_entry_bg_dark: String,
+    color_headerbar_bg_light: String,
+    color_headerbar_bg_dark: String,
+    color_sidebar_bg_light: String,
+    color_sidebar_bg_dark: String,
     // Notification
     notification_radius: f64,
     notification_opacity: f64,
@@ -98,6 +107,20 @@ pub struct ThemeBuilderModel {
     day_panel_row: adw::ActionRow,
     night_panel_row: adw::ActionRow,
     compat_rows: HashMap<ThemeControlId, (adw::SpinRow, String)>, // (row, original_subtitle)
+}
+
+/// Which per-widget, per-scheme colour slot a `SetWidgetColor` message
+/// targets.
+#[derive(Debug, Clone, Copy)]
+pub enum WidgetColorTarget {
+    ButtonLight,
+    ButtonDark,
+    EntryLight,
+    EntryDark,
+    HeaderbarLight,
+    HeaderbarDark,
+    SidebarLight,
+    SidebarDark,
 }
 
 #[derive(Debug)]
@@ -147,6 +170,8 @@ pub enum ThemeBuilderMsg {
     SetWidgetInputInset(f64),
     SetWidgetButtonRaise(f64),
     SetWidgetHeaderbarGradient(f64),
+    // Per-widget colour overrides (scheme, widget, hex-or-empty)
+    SetWidgetColor(WidgetColorTarget, String),
     // Notifications
     SetNotificationRadius(f64),
     SetNotificationOpacity(f64),
@@ -1467,6 +1492,136 @@ impl SimpleComponent for ThemeBuilderModel {
         }
         widget_style_group.add(&widget_gradient_row);
 
+        // === Widget Colours (per-widget, per-scheme) ===
+        let widget_colors_group = adw::PreferencesGroup::builder()
+            .title("Widget Colours")
+            .description(
+                "Override specific widget backgrounds for light and dark \
+                 mode independently. Each slot supersedes the accent-tint \
+                 default. Reset to remove an override.",
+            )
+            .build();
+
+        let make_color_pair_row = |title: &str,
+                                   subtitle: &str,
+                                   light_target: WidgetColorTarget,
+                                   dark_target: WidgetColorTarget,
+                                   light_key: &str,
+                                   dark_key: &str|
+         -> adw::ActionRow {
+            let row = adw::ActionRow::builder()
+                .title(title)
+                .subtitle(subtitle)
+                .build();
+
+            let light_btn = gtk::ColorDialogButton::builder().tooltip_text("Light mode").build();
+            light_btn.set_dialog(
+                &gtk::ColorDialog::builder()
+                    .title(format!("{title} (light)"))
+                    .with_alpha(false)
+                    .build(),
+            );
+            let saved_light = app_settings.string(light_key).to_string();
+            if !saved_light.is_empty() {
+                if let Ok(rgba) = gtk::gdk::RGBA::parse(&saved_light) {
+                    light_btn.set_rgba(&rgba);
+                }
+            }
+
+            let dark_btn = gtk::ColorDialogButton::builder().tooltip_text("Dark mode").build();
+            dark_btn.set_dialog(
+                &gtk::ColorDialog::builder()
+                    .title(format!("{title} (dark)"))
+                    .with_alpha(false)
+                    .build(),
+            );
+            let saved_dark = app_settings.string(dark_key).to_string();
+            if !saved_dark.is_empty() {
+                if let Ok(rgba) = gtk::gdk::RGBA::parse(&saved_dark) {
+                    dark_btn.set_rgba(&rgba);
+                }
+            }
+
+            let reset_btn = gtk::Button::builder()
+                .icon_name("edit-clear-symbolic")
+                .valign(gtk::Align::Center)
+                .css_classes(["flat"])
+                .tooltip_text("Clear both overrides")
+                .build();
+
+            {
+                let sender = sender.clone();
+                light_btn.connect_rgba_notify(move |btn| {
+                    let rgba = btn.rgba();
+                    let hex = format!(
+                        "#{:02x}{:02x}{:02x}",
+                        (rgba.red() * 255.0) as u8,
+                        (rgba.green() * 255.0) as u8,
+                        (rgba.blue() * 255.0) as u8,
+                    );
+                    sender.input(ThemeBuilderMsg::SetWidgetColor(light_target, hex));
+                });
+            }
+            {
+                let sender = sender.clone();
+                dark_btn.connect_rgba_notify(move |btn| {
+                    let rgba = btn.rgba();
+                    let hex = format!(
+                        "#{:02x}{:02x}{:02x}",
+                        (rgba.red() * 255.0) as u8,
+                        (rgba.green() * 255.0) as u8,
+                        (rgba.blue() * 255.0) as u8,
+                    );
+                    sender.input(ThemeBuilderMsg::SetWidgetColor(dark_target, hex));
+                });
+            }
+            {
+                let sender = sender.clone();
+                reset_btn.connect_clicked(move |_| {
+                    sender.input(ThemeBuilderMsg::SetWidgetColor(light_target, String::new()));
+                    sender.input(ThemeBuilderMsg::SetWidgetColor(dark_target, String::new()));
+                });
+            }
+
+            row.add_suffix(&light_btn);
+            row.add_suffix(&dark_btn);
+            row.add_suffix(&reset_btn);
+            row
+        };
+
+        widget_colors_group.add(&make_color_pair_row(
+            "Button Background",
+            "Sets @button_bg_color (light & dark)",
+            WidgetColorTarget::ButtonLight,
+            WidgetColorTarget::ButtonDark,
+            "tb-color-button-bg-light",
+            "tb-color-button-bg-dark",
+        ));
+        widget_colors_group.add(&make_color_pair_row(
+            "Input Background",
+            "Sets @entry_bg_color (light & dark)",
+            WidgetColorTarget::EntryLight,
+            WidgetColorTarget::EntryDark,
+            "tb-color-entry-bg-light",
+            "tb-color-entry-bg-dark",
+        ));
+        widget_colors_group.add(&make_color_pair_row(
+            "Headerbar Background",
+            "Sets @headerbar_bg_color (light & dark)",
+            WidgetColorTarget::HeaderbarLight,
+            WidgetColorTarget::HeaderbarDark,
+            "tb-color-headerbar-bg-light",
+            "tb-color-headerbar-bg-dark",
+        ));
+        widget_colors_group.add(&make_color_pair_row(
+            "Sidebar Background",
+            "Sets @sidebar_bg_color (light & dark)",
+            WidgetColorTarget::SidebarLight,
+            WidgetColorTarget::SidebarDark,
+            "tb-color-sidebar-bg-light",
+            "tb-color-sidebar-bg-dark",
+        ));
+
         // appended in final ordering
 
         // === Window Behavior (Mutter) ===
@@ -1611,7 +1766,7 @@ impl SimpleComponent for ThemeBuilderModel {
             &[&accent_group, &tint_group, &shared_group, &panel_group, &dash_group, &notif_group, &scheme_group],
         );
         let windows_page = build_category_page(
-            &[&radii_group, &csd_group, &inset_group, &sidebar_group, &layer_group, &widget_style_group, &window_group, &wm_group],
+            &[&radii_group, &csd_group, &inset_group, &sidebar_group, &layer_group, &widget_style_group, &widget_colors_group, &window_group, &wm_group],
         );
         let typography_page = build_category_page(
             &[&font_group, &cursor_group],
@@ -1760,6 +1915,14 @@ impl SimpleComponent for ThemeBuilderModel {
             widget_input_inset: app_settings.double("tb-widget-input-inset"),
             widget_button_raise: app_settings.double("tb-widget-button-raise"),
             widget_headerbar_gradient: app_settings.double("tb-widget-headerbar-gradient"),
+            color_button_bg_light: app_settings.string("tb-color-button-bg-light").into(),
+            color_button_bg_dark: app_settings.string("tb-color-button-bg-dark").into(),
+            color_entry_bg_light: app_settings.string("tb-color-entry-bg-light").into(),
+            color_entry_bg_dark: app_settings.string("tb-color-entry-bg-dark").into(),
+            color_headerbar_bg_light: app_settings.string("tb-color-headerbar-bg-light").into(),
+            color_headerbar_bg_dark: app_settings.string("tb-color-headerbar-bg-dark").into(),
+            color_sidebar_bg_light: app_settings.string("tb-color-sidebar-bg-light").into(),
+            color_sidebar_bg_dark: app_settings.string("tb-color-sidebar-bg-dark").into(),
             notification_radius: app_settings.double("tb-notification-radius"),
             notification_opacity: app_settings.double("tb-notification-opacity"),
             scheduled_accent_enabled: saved_sched_enabled,
@@ -2181,6 +2344,17 @@ impl SimpleComponent for ThemeBuilderModel {
             ThemeBuilderMsg::SetWidgetInputInset(v) => self.widget_input_inset = v,
             ThemeBuilderMsg::SetWidgetButtonRaise(v) => self.widget_button_raise = v,
             ThemeBuilderMsg::SetWidgetHeaderbarGradient(v) => self.widget_headerbar_gradient = v,
+            // --- Per-widget colour overrides ---
+            ThemeBuilderMsg::SetWidgetColor(target, hex) => match target {
+                WidgetColorTarget::ButtonLight => self.color_button_bg_light = hex,
+                WidgetColorTarget::ButtonDark => self.color_button_bg_dark = hex,
+                WidgetColorTarget::EntryLight => self.color_entry_bg_light = hex,
+                WidgetColorTarget::EntryDark => self.color_entry_bg_dark = hex,
+                WidgetColorTarget::HeaderbarLight => self.color_headerbar_bg_light = hex,
+                WidgetColorTarget::HeaderbarDark => self.color_headerbar_bg_dark = hex,
+                WidgetColorTarget::SidebarLight => self.color_sidebar_bg_light = hex,
+                WidgetColorTarget::SidebarDark => self.color_sidebar_bg_dark = hex,
+            },
             // --- Notifications ---
             ThemeBuilderMsg::SetNotificationRadius(v) => self.notification_radius = v,
             ThemeBuilderMsg::SetNotificationOpacity(v) => self.notification_opacity = v,
@@ -2349,6 +2523,20 @@ impl SimpleComponent for ThemeBuilderModel {
                     "tb-widget-headerbar-gradient",
                     self.widget_headerbar_gradient,
                 );
+                let _ = app.set_string("tb-color-button-bg-light", &self.color_button_bg_light);
+                let _ = app.set_string("tb-color-button-bg-dark", &self.color_button_bg_dark);
+                let _ = app.set_string("tb-color-entry-bg-light", &self.color_entry_bg_light);
+                let _ = app.set_string("tb-color-entry-bg-dark", &self.color_entry_bg_dark);
+                let _ = app.set_string(
+                    "tb-color-headerbar-bg-light",
+                    &self.color_headerbar_bg_light,
+                );
+                let _ = app.set_string(
+                    "tb-color-headerbar-bg-dark",
+                    &self.color_headerbar_bg_dark,
+                );
+                let _ = app.set_string("tb-color-sidebar-bg-light", &self.color_sidebar_bg_light);
+                let _ = app.set_string("tb-color-sidebar-bg-dark", &self.color_sidebar_bg_dark);
                 let _ = app.set_double("tb-notification-radius", self.notification_radius);
                 let _ = app.set_double("tb-notification-opacity", self.notification_opacity);
 
@@ -2389,6 +2577,14 @@ impl SimpleComponent for ThemeBuilderModel {
                 self.widget_input_inset = 0.0;
                 self.widget_button_raise = 0.0;
                 self.widget_headerbar_gradient = 0.0;
+                self.color_button_bg_light = String::new();
+                self.color_button_bg_dark = String::new();
+                self.color_entry_bg_light = String::new();
+                self.color_entry_bg_dark = String::new();
+                self.color_headerbar_bg_light = String::new();
+                self.color_headerbar_bg_dark = String::new();
+                self.color_sidebar_bg_light = String::new();
+                self.color_sidebar_bg_dark = String::new();
 
                 let _ = self.apply_uc.reset();
                 let _ = sender
@@ -2444,6 +2640,16 @@ impl ThemeBuilderModel {
                 button_raise: Opacity::from_fraction(self.widget_button_raise)?,
                 headerbar_gradient: Opacity::from_fraction(self.widget_headerbar_gradient)?,
             },
+            widget_colors: WidgetColorOverrides {
+                button_bg_light: parse_optional_hex(&self.color_button_bg_light)?,
+                button_bg_dark: parse_optional_hex(&self.color_button_bg_dark)?,
+                entry_bg_light: parse_optional_hex(&self.color_entry_bg_light)?,
+                entry_bg_dark: parse_optional_hex(&self.color_entry_bg_dark)?,
+                headerbar_bg_light: parse_optional_hex(&self.color_headerbar_bg_light)?,
+                headerbar_bg_dark: parse_optional_hex(&self.color_headerbar_bg_dark)?,
+                sidebar_bg_light: parse_optional_hex(&self.color_sidebar_bg_light)?,
+                sidebar_bg_dark: parse_optional_hex(&self.color_sidebar_bg_dark)?,
+            },
             sidebar: SidebarSpec {
                 opacity: Opacity::from_fraction(self.sidebar_opacity)?,
                 fg_override: {
@@ -2462,6 +2668,17 @@ impl ThemeBuilderModel {
             },
             overview_blur: self.overview_blur,
         })
+    }
+}
+
+/// Parse a user-supplied hex string that may be empty, trimming
+/// whitespace and treating "" as "no override".
+fn parse_optional_hex(raw: &str) -> Result<Option<HexColor>, gnomex_domain::DomainError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(HexColor::new(trimmed)?))
     }
 }
 

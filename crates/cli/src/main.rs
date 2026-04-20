@@ -15,7 +15,7 @@ use gnomex_app::use_cases::{ApplyThemeUseCase, CustomizeShellUseCase, PacksUseCa
 use gnomex_domain::{
     DashSpec, ForegroundSpec, HeaderbarSpec, HexColor, InsetSpec, LayerSeparationSpec,
     NotificationSpec, Opacity, PanelSpec, Radius, SidebarSpec, StatusColorSpec, ThemeSpec,
-    TintSpec, WidgetStyleSpec, WindowFrameSpec,
+    TintSpec, WidgetColorOverrides, WidgetStyleSpec, WindowFrameSpec,
 };
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
@@ -355,6 +355,16 @@ fn build_spec_from_gsettings() -> Result<ThemeSpec> {
             button_raise: Opacity::from_fraction(app.double("tb-widget-button-raise"))?,
             headerbar_gradient: Opacity::from_fraction(app.double("tb-widget-headerbar-gradient"))?,
         },
+        widget_colors: WidgetColorOverrides {
+            button_bg_light: parse_optional_hex(&app.string("tb-color-button-bg-light"))?,
+            button_bg_dark: parse_optional_hex(&app.string("tb-color-button-bg-dark"))?,
+            entry_bg_light: parse_optional_hex(&app.string("tb-color-entry-bg-light"))?,
+            entry_bg_dark: parse_optional_hex(&app.string("tb-color-entry-bg-dark"))?,
+            headerbar_bg_light: parse_optional_hex(&app.string("tb-color-headerbar-bg-light"))?,
+            headerbar_bg_dark: parse_optional_hex(&app.string("tb-color-headerbar-bg-dark"))?,
+            sidebar_bg_light: parse_optional_hex(&app.string("tb-color-sidebar-bg-light"))?,
+            sidebar_bg_dark: parse_optional_hex(&app.string("tb-color-sidebar-bg-dark"))?,
+        },
         sidebar: SidebarSpec {
             opacity: Opacity::from_fraction(app.double("tb-sidebar-opacity"))?,
             fg_override: {
@@ -374,6 +384,15 @@ fn build_spec_from_gsettings() -> Result<ThemeSpec> {
         },
         overview_blur: app.boolean("tb-overview-blur"),
     })
+}
+
+fn parse_optional_hex(raw: &str) -> Result<Option<HexColor>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(HexColor::new(trimmed).context("invalid hex override")?))
+    }
 }
 
 fn accent_name_to_hex(name: &str) -> String {
