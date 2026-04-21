@@ -273,6 +273,43 @@ impl SimpleComponent for ThemeBuilderModel {
             Some(g)
         };
 
+        // === SSD/CSD decoration banner (GXF-021) ===
+        // Snapshot the currently-open window mix at init. Theme-builder
+        // controls (headerbar height, window radius, CSD drop-shadow)
+        // only reach CSD apps; SSD apps render their titlebar via
+        // Mutter and stay visually unchanged. Surface a compact
+        // warning row whenever SSD windows are detected so users
+        // understand the coverage limits before tuning.
+        let decoration_report = services.decoration_probe.detect_decoration_mix();
+        let decoration_group = if decoration_report.has_ssd_windows() {
+            let ssd_list = decoration_report.ssd_app_classes().join(", ");
+            let g = adw::PreferencesGroup::builder()
+                .title("Some windows use server-side decorations")
+                .description(
+                    "The controls below apply to apps that draw their own \
+                     decorations (CSD). Apps listed here use SSD \u{2014} \
+                     their titlebar is drawn by the window manager and will \
+                     not pick up headerbar or window-radius changes. See \
+                     the Diagnostics tab for the full list.",
+                )
+                .build();
+            let row = adw::ActionRow::builder()
+                .title(format!(
+                    "{} SSD app(s) open",
+                    decoration_report.ssd_count(),
+                ))
+                .subtitle(ssd_list)
+                .css_classes(["warning"])
+                .build();
+            let icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+            icon.add_css_class("warning");
+            row.add_prefix(&icon);
+            g.add(&row);
+            Some(g)
+        } else {
+            None
+        };
+
         // === Unified Accent Color section ===
         // Dynamically shows single or day/night pickers based on schedule toggle.
         let accent_group = adw::PreferencesGroup::builder()
@@ -1875,6 +1912,9 @@ impl SimpleComponent for ThemeBuilderModel {
             .build();
         sidebar_box.append(&version_banner);
         if let Some(ref g) = conflicts_group {
+            sidebar_box.append(g);
+        }
+        if let Some(ref g) = decoration_group {
             sidebar_box.append(g);
         }
         sidebar_box.append(&sidebar_list);

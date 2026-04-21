@@ -8,7 +8,8 @@
 //! every view can spawn async work on the tokio runtime.
 
 use gnomex_app::ports::{
-    BlurMyShellController, FloatingDockController, ShellCustomizer, ThemingConflictDetector,
+    BlurMyShellController, FloatingDockController, LocalInstaller, ShellCustomizer,
+    ThemingConflictDetector, WindowDecorationProbe,
 };
 use gnomex_app::use_cases::{
     ApplyThemeUseCase, BrowseUseCase, CustomizeShellUseCase, CustomizeUseCase, ManageUseCase,
@@ -17,7 +18,7 @@ use gnomex_app::use_cases::{
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
     GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell, GSettingsFloatingDock,
-    GioThemingConflictDetector, OcsClient, PackTomlStorage, VscodeThemer,
+    GioThemingConflictDetector, OcsClient, PackTomlStorage, VscodeThemer, WmctrlDecorationProbe,
 };
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -35,6 +36,12 @@ pub struct AppServices {
     pub floating_dock: Arc<dyn FloatingDockController>,
     pub blur_my_shell: Arc<dyn BlurMyShellController>,
     pub conflict_detector: Arc<dyn ThemingConflictDetector>,
+    /// Direct handle to the local-install adapter — the diagnostics
+    /// view needs `list_shadowed_resources` which isn't exposed
+    /// through a use case.
+    pub installer: Arc<dyn LocalInstaller>,
+    /// CSD / SSD probe for the decoration-mix report.
+    pub decoration_probe: Arc<dyn WindowDecorationProbe>,
     pub detected_gnome_version: String,
 }
 
@@ -106,6 +113,11 @@ impl AppServices {
             &shell_version,
         ));
 
+        // Keep an `Arc<dyn LocalInstaller>` handle for the UI
+        // diagnostics view before the concrete `installer` is moved
+        // into `PacksUseCase`.
+        let installer_for_ui: Arc<dyn LocalInstaller> = installer.clone();
+
         let packs = Arc::new(PacksUseCase::new(
             pack_storage,
             appearance.clone(),
@@ -125,6 +137,9 @@ impl AppServices {
         let conflict_detector: Arc<dyn ThemingConflictDetector> =
             Arc::new(GioThemingConflictDetector::new());
 
+        let decoration_probe: Arc<dyn WindowDecorationProbe> =
+            Arc::new(WmctrlDecorationProbe::new());
+
         Self {
             handle,
             browse,
@@ -136,6 +151,8 @@ impl AppServices {
             floating_dock,
             blur_my_shell,
             conflict_detector,
+            installer: installer_for_ui,
+            decoration_probe,
             detected_gnome_version,
         }
     }

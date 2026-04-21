@@ -4,6 +4,7 @@
 //! Main application component — owns the AdwViewSwitcher navigation and
 //! top-level page switching.
 
+use crate::components::diagnostics::{DiagnosticsModel, DiagnosticsOutput};
 use crate::components::explore::{ExploreModel, ExploreOutput};
 use crate::components::installed::{InstalledModel, InstalledOutput};
 use crate::components::packs::{PacksModel, PacksOutput};
@@ -27,6 +28,8 @@ pub struct AppModel {
     settings: Controller<SettingsModel>,
     #[allow(dead_code)]
     shell_tweaks: Controller<ShellTweaksModel>,
+    #[allow(dead_code)]
+    diagnostics: Controller<DiagnosticsModel>,
     toast_overlay: adw::ToastOverlay,
 }
 
@@ -84,6 +87,12 @@ impl SimpleComponent for AppModel {
             .launch(services.clone())
             .detach();
 
+        let diagnostics = DiagnosticsModel::builder()
+            .launch(services.clone())
+            .forward(sender.input_sender(), |msg| match msg {
+                DiagnosticsOutput::Toast(s) => AppMsg::Toast(s),
+            });
+
         // Build the layout with ToastOverlay wrapping ToolbarView
         let toast_overlay = adw::ToastOverlay::new();
 
@@ -138,6 +147,12 @@ impl SimpleComponent for AppModel {
             "preferences-desktop-symbolic",
         );
         view_stack.add_titled_with_icon(
+            diagnostics.widget(),
+            Some("diagnostics"),
+            "Diagnostics",
+            "dialog-information-symbolic",
+        );
+        view_stack.add_titled_with_icon(
             settings.widget(),
             Some("settings"),
             "Settings",
@@ -151,6 +166,7 @@ impl SimpleComponent for AppModel {
             packs,
             settings,
             shell_tweaks,
+            diagnostics,
             toast_overlay: toast_overlay.clone(),
         };
 

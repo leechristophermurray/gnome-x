@@ -1,10 +1,12 @@
 // Copyright 2026 GNOME X Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::theme_paths::{list_all, ResourcePaths};
+use crate::theme_paths::{list_all, shadow_map, ResourcePaths, SearchPath};
 use gnomex_app::ports::LocalInstaller;
 use gnomex_app::AppError;
-use gnomex_domain::{ExtensionUuid, ThemeType};
+use gnomex_domain::{
+    ExtensionUuid, ResourceKind, ShadowedLocation, ShadowedResource, ThemeType,
+};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
@@ -37,6 +39,14 @@ impl FilesystemInstaller {
             data_dir,
             paths: ResourcePaths::from_env(),
         }
+    }
+
+    /// Hermetic constructor for tests — wire an explicit `data_dir`
+    /// (where new installs land) and a fully-formed [`ResourcePaths`]
+    /// (what gets walked for listings / shadow detection). Lets
+    /// tests run in parallel without racing `$HOME` / `$XDG_*`.
+    pub fn with_paths(data_dir: PathBuf, paths: ResourcePaths) -> Self {
+        Self { data_dir, paths }
     }
 
     fn extensions_dir(&self) -> PathBuf {
@@ -163,6 +173,52 @@ impl LocalInstaller for FilesystemInstaller {
         cursors.sort();
         cursors.dedup();
         Ok(cursors)
+    }
+
+    fn list_shadowed_resources(
+        &self,
+        kind: ResourceKind,
+    ) -> Result<Vec<ShadowedResource>, AppError> {
+        let search = match kind {
+            ResourceKind::Theme => self.paths.themes(),
+            ResourceKind::Icon => self.paths.icons(),
+            ResourceKind::Cursor => self.paths.cursors(),
+        };
+        let map = shadow_map(&search);
+        let mut out = Vec::new();
+        for (name, locs) in map {
+            if locs.len() < 2 {
+                continue;
+            }
+            // For cursors, discard names whose directory doesn't have
+            // a `cursors/` subdir in *any* location — those are
+            // icon-only entries we don't want to confuse the cursor
+            // report with.
+            if kind == ResourceKind::Cursor
+                && !locs
+                    .iter()
+                    .any(|sp: &SearchPath| sp.path.join(&name).join("cursors").is_dir())
+            {
+                continue;
+            }
+            // shadow_map returns the *parent* directory (e.g.
+            // `/usr/share/themes`); join the resource name onto each
+            // so the UI can surface the absolute path to the theme
+            // itself.
+            let locations = locs
+                .into_iter()
+                .map(|sp| ShadowedLocation {
+                    path: sp.path.join(&name),
+                    user_writable: sp.origin.is_user_writable(),
+                })
+                .collect();
+            out.push(ShadowedResource {
+                kind,
+                name,
+                locations,
+            });
+        }
+        Ok(out)
     }
 }
 
