@@ -6,6 +6,7 @@
 //! These traits define what the application layer *needs* from the outside
 //! world. Concrete implementations live in `gnomex-infra` (Red layer).
 
+mod app_launcher_overrides;
 mod app_settings;
 mod appearance_settings;
 mod blur_my_shell;
@@ -14,6 +15,7 @@ mod external_app_themer;
 mod extension_repository;
 mod floating_dock;
 mod local_installer;
+mod mutter_settings;
 mod pack_storage;
 mod shell_customizer;
 mod shell_proxy;
@@ -22,6 +24,7 @@ mod theme_writer;
 mod theming_conflict_detector;
 mod window_decoration_probe;
 
+pub use app_launcher_overrides::*;
 pub use app_settings::*;
 pub use appearance_settings::*;
 pub use blur_my_shell::*;
@@ -30,6 +33,7 @@ pub use external_app_themer::*;
 pub use extension_repository::*;
 pub use floating_dock::*;
 pub use local_installer::*;
+pub use mutter_settings::*;
 pub use pack_storage::*;
 pub use shell_customizer::*;
 pub use shell_proxy::*;

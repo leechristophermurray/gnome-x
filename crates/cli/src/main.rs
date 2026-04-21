@@ -14,13 +14,14 @@ use gnomex_app::ports::{ShellCustomizer, ShellProxy};
 use gnomex_app::use_cases::{ApplyThemeUseCase, CustomizeShellUseCase, PacksUseCase};
 use gnomex_domain::{
     DashSpec, ForegroundSpec, HeaderbarSpec, HexColor, InsetSpec, LayerSeparationSpec,
-    NotificationSpec, Opacity, PanelSpec, Radius, SidebarSpec, StatusColorSpec, ThemeSpec,
-    TintSpec, WidgetColorOverrides, WidgetStyleSpec, WindowFrameSpec,
+    NotificationSpec, Opacity, PanelSpec, PerAppScaleOverride, Radius, ScaleFactor, ScalingSpec,
+    SidebarSpec, StatusColorSpec, TextScaling, ThemeSpec, TintSpec, WidgetColorOverrides,
+    WidgetStyleSpec, WindowFrameSpec,
 };
 use gnomex_infra::{
-    ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
-    GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell, GSettingsFloatingDock,
-    OcsClient, PackTomlStorage, VscodeThemer,
+    ChromiumThemer, DbusShellProxy, DesktopAppLauncherOverrides, EgoClient, FilesystemInstaller,
+    FilesystemThemeWriter, GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell,
+    GSettingsFloatingDock, GSettingsMutter, OcsClient, PackTomlStorage, VscodeThemer,
 };
 use std::sync::Arc;
 
@@ -229,6 +230,24 @@ fn handle_status() -> Result<()> {
     );
     println!("Panel opacity:         {:.0}%", app.double("tb-panel-opacity"));
     println!("Tint intensity:        {:.0}%", app.double("tb-tint-intensity"));
+    println!(
+        "Text scaling:          {:.2}x",
+        app.double("tb-scaling-text-factor")
+    );
+    let mutter_fb = app.boolean("tb-scaling-monitor-framebuffer");
+    let mutter_x11 = app.boolean("tb-scaling-x11-fractional");
+    println!(
+        "Fractional scaling:    framebuffer={} x11={}",
+        if mutter_fb { "on" } else { "off" },
+        if mutter_x11 { "on" } else { "off" }
+    );
+    let per_app = app.strv("tb-scaling-per-app-overrides");
+    if !per_app.is_empty() {
+        println!("Per-app scale overrides:");
+        for entry in per_app.iter() {
+            println!("  {}", entry.as_str());
+        }
+    }
     Ok(())
 }
 
@@ -240,9 +259,14 @@ fn build_apply_theme_use_case() -> Result<ApplyThemeUseCase> {
         Arc::from(gnomex_infra::theme_css::create_css_generator(&shell_version));
     let writer: Arc<FilesystemThemeWriter> = Arc::new(FilesystemThemeWriter::new());
     let appearance: Arc<GSettingsAppearance> = Arc::new(GSettingsAppearance::new());
+    let mutter: Arc<GSettingsMutter> = Arc::new(GSettingsMutter::new());
+    let launcher: Arc<DesktopAppLauncherOverrides> =
+        Arc::new(DesktopAppLauncherOverrides::new());
     Ok(ApplyThemeUseCase::new(generator, writer, appearance)
         .with_external_themer(Arc::new(VscodeThemer::new()))
-        .with_external_themer(Arc::new(ChromiumThemer::new())))
+        .with_external_themer(Arc::new(ChromiumThemer::new()))
+        .with_mutter_settings(mutter)
+        .with_app_launcher_overrides(launcher))
 }
 
 fn build_ext_controllers() -> gnomex_infra::shell_customizer::ExtensionControllers {
@@ -383,6 +407,40 @@ fn build_spec_from_gsettings() -> Result<ThemeSpec> {
             opacity: Opacity::from_fraction(app.double("tb-notification-opacity"))?,
         },
         overview_blur: app.boolean("tb-overview-blur"),
+        scaling: build_scaling_from_gsettings(&app)?,
+    })
+}
+
+/// Parse the scaling tb-* keys into a validated `ScalingSpec`. The
+/// per-app list lives in a strv as `"APP_ID:SCALE"` entries; invalid
+/// entries are logged and skipped so a typo in dconf can't break the
+/// whole apply.
+fn build_scaling_from_gsettings(app: &gio::Settings) -> Result<ScalingSpec> {
+    let text_scaling = TextScaling::new(app.double("tb-scaling-text-factor"))?;
+    let mut per_app = Vec::new();
+    for entry in app.strv("tb-scaling-per-app-overrides").iter() {
+        let raw = entry.as_str();
+        let Some((id, scale_s)) = raw.split_once(':') else {
+            tracing::warn!("skipping malformed per-app-override entry: {raw}");
+            continue;
+        };
+        let Ok(scale_f) = scale_s.trim().parse::<f64>() else {
+            tracing::warn!("skipping per-app-override with unparseable scale: {raw}");
+            continue;
+        };
+        match ScaleFactor::new(scale_f) {
+            Ok(scale) => per_app.push(PerAppScaleOverride {
+                app_id: id.trim().to_owned(),
+                scale,
+            }),
+            Err(e) => tracing::warn!("rejecting per-app-override for {id}: {e}"),
+        }
+    }
+    Ok(ScalingSpec {
+        text_scaling,
+        scale_monitor_framebuffer: app.boolean("tb-scaling-monitor-framebuffer"),
+        x11_randr_fractional_scaling: app.boolean("tb-scaling-x11-fractional"),
+        per_app_overrides: per_app,
     })
 }
 

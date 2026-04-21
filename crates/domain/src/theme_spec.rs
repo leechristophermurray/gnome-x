@@ -277,6 +277,108 @@ pub struct NotificationSpec {
     pub opacity: Opacity,
 }
 
+/// HiDPI / scaling controls that live orthogonal to the rest of the
+/// theme. The three user-facing problems this addresses:
+///
+/// - **GXF-050 (fractional scaling fine-tuning)** — flipping Mutter's
+///   experimental `scale-monitor-framebuffer` and
+///   `x11-randr-fractional-scaling` flags without hand-editing dconf.
+/// - **GXF-051 (per-app scaling overrides)** — registering a scale
+///   factor for a single `.desktop` app so it launches with the
+///   appropriate `GDK_SCALE` / `--force-device-scale-factor`.
+/// - **GXF-053 (text-vs-widget scaling decoupling)** — exposing
+///   `text-scaling-factor` independently from the global monitor
+///   scale.
+///
+/// Defaults are chosen so nothing is written when the user hasn't
+/// opted in: `text_scaling=1.0`, empty flag set, no per-app overrides.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ScalingSpec {
+    /// `org.gnome.desktop.interface text-scaling-factor`. 1.0 = no
+    /// change (Adwaita default). Range 0.5..=3.0 is enforced at
+    /// construction time, matching gnome-control-center's bounds.
+    pub text_scaling: TextScaling,
+    /// Whether to write `scale-monitor-framebuffer` into
+    /// `org.gnome.mutter experimental-features`. Required on Wayland
+    /// for fractional scales to render crisp rather than bilinear-
+    /// scaled.
+    pub scale_monitor_framebuffer: bool,
+    /// Whether to write `x11-randr-fractional-scaling` into the same
+    /// strv. X11-session sibling of the above.
+    pub x11_randr_fractional_scaling: bool,
+    /// Per-app launcher overrides. Each entry requests that a copy of
+    /// the named `.desktop` file be written to
+    /// `~/.local/share/applications/` with `Exec=` prefixed by
+    /// `env GDK_SCALE=<factor>`.
+    pub per_app_overrides: Vec<PerAppScaleOverride>,
+}
+
+/// Validated `text-scaling-factor`. GNOME's settings daemon accepts
+/// 0.5..=3.0 (clamped higher than that on most setups); we mirror the
+/// bound to catch garbage values before we write to GSettings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextScaling(f64);
+
+impl TextScaling {
+    pub fn new(v: f64) -> Result<Self, DomainError> {
+        if !(0.5..=3.0).contains(&v) {
+            return Err(DomainError::InvalidTextScaling(v));
+        }
+        Ok(Self(v))
+    }
+
+    pub fn as_f64(self) -> f64 {
+        self.0
+    }
+
+    /// Whether the value is the Adwaita default (no GSettings write
+    /// needed). Written as a method so callers don't float-compare.
+    pub fn is_default(self) -> bool {
+        (self.0 - 1.0).abs() < f64::EPSILON
+    }
+}
+
+impl Default for TextScaling {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+/// A single per-app scale override. Identified by the `.desktop`
+/// file's canonical id (e.g. `org.gnome.Nautilus`); the adapter
+/// resolves that to a file under `/usr/share/applications/` or
+/// `~/.local/share/applications/` and writes a copy with the
+/// modified `Exec` line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PerAppScaleOverride {
+    pub app_id: String,
+    pub scale: ScaleFactor,
+}
+
+/// A validated HiDPI scale factor. Restricted to the set of values
+/// gnome-control-center exposes for monitor scaling plus 0.5 for
+/// hi-dpi-on-lodpi-screen downsampling: 0.5, 1.0, 1.25, 1.5, 1.75,
+/// 2.0. Any other value is rejected so the adapter can't generate a
+/// `.desktop` file with `GDK_SCALE=0.873`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScaleFactor(f64);
+
+impl ScaleFactor {
+    pub const ALLOWED: &'static [f64] = &[0.5, 1.0, 1.25, 1.5, 1.75, 2.0];
+
+    pub fn new(v: f64) -> Result<Self, DomainError> {
+        if Self::ALLOWED.iter().any(|a| (*a - v).abs() < 1e-6) {
+            Ok(Self(v))
+        } else {
+            Err(DomainError::InvalidScaleFactor(v))
+        }
+    }
+
+    pub fn as_f64(self) -> f64 {
+        self.0
+    }
+}
+
 /// A complete, version-independent theme specification.
 ///
 /// Contains all the values the user has set via the Theme Builder.
@@ -300,6 +402,9 @@ pub struct ThemeSpec {
     pub status_colors: StatusColorSpec,
     pub notifications: NotificationSpec,
     pub overview_blur: bool,
+    /// HiDPI / fractional-scaling / per-app override controls.
+    /// Defaulted so untouched packs emit no GSettings writes.
+    pub scaling: ScalingSpec,
 }
 
 impl ThemeSpec {
@@ -345,6 +450,7 @@ impl ThemeSpec {
                 opacity: Opacity(0.95),
             },
             overview_blur: true,
+            scaling: ScalingSpec::default(),
         }
     }
 }
