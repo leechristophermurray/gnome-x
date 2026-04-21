@@ -3,7 +3,7 @@
 
 use crate::ports::{
     AppSettings, AppearanceSettings, ContentRepository, LocalInstaller, PackStorage, PackSummary,
-    ShellCustomizer, ShellProxy,
+    ShellCustomizer, ShellProxy, ThemeRenderTrigger,
 };
 use crate::AppError;
 use gnomex_domain::{
@@ -20,6 +20,13 @@ pub struct PacksUseCase {
     content_repo: Arc<dyn ContentRepository>,
     app_settings: Arc<dyn AppSettings>,
     shell_customizer: Arc<dyn ShellCustomizer>,
+    /// Optional post-apply theme regenerator. When present, `apply_pack`
+    /// runs it after restoring the pack's `gsettings_overrides` so the
+    /// newly-restored `tb-*` values turn into GTK 4 + GTK 3 CSS on
+    /// disk immediately (GXF-061). When absent (headless tests), the
+    /// pack's `tb-*` values are still restored but callers are
+    /// responsible for triggering a theme re-render.
+    theme_render_trigger: Option<Arc<dyn ThemeRenderTrigger>>,
 }
 
 impl PacksUseCase {
@@ -40,7 +47,19 @@ impl PacksUseCase {
             content_repo,
             app_settings,
             shell_customizer,
+            theme_render_trigger: None,
         }
+    }
+
+    /// Wire a theme render trigger so `apply_pack` regenerates GTK 4 +
+    /// GTK 3 CSS after restoring the pack's GSettings overrides. See
+    /// [`ThemeRenderTrigger`] and GXF-061.
+    pub fn with_theme_render_trigger(
+        mut self,
+        trigger: Arc<dyn ThemeRenderTrigger>,
+    ) -> Self {
+        self.theme_render_trigger = Some(trigger);
+        self
     }
 
     /// List all saved packs.
@@ -307,6 +326,22 @@ impl PacksUseCase {
             }
         }
 
+        // Re-render the theme CSS (GTK 4 + GTK 3 both, via the
+        // `ThemeWriter` port) from the just-restored `tb-*` values.
+        // Failures here are logged but non-fatal — the pack's
+        // GSettings state is already on disk, so the user can trigger
+        // a regen manually via the Theme Builder UI if this path
+        // stumbles. GXF-061.
+        if let Some(trigger) = &self.theme_render_trigger {
+            if let Err(e) = trigger.rerender() {
+                tracing::warn!("pack apply: theme re-render failed: {e}");
+            }
+        } else {
+            tracing::debug!(
+                "pack apply: no ThemeRenderTrigger wired — caller must regenerate CSS"
+            );
+        }
+
         Ok(())
     }
 
@@ -338,6 +373,7 @@ mod tests {
     use crate::testing::{
         enable_animations, sample_pack, MockAppSettings, MockAppearance, MockContentRepo,
         MockInstaller, MockPackStorage, MockShellCustomizer, MockShellProxy,
+        MockThemeRenderTrigger,
     };
     use gnomex_domain::{GSettingOverride, ShellTweak, ShellTweakId, ShellVersion, TweakValue};
 
@@ -514,6 +550,62 @@ mod tests {
             .check_compatibility("same-version", &ShellVersion::new(47, 0))
             .unwrap();
         assert!(report.is_clean());
+    }
+
+    #[tokio::test]
+    async fn apply_pack_triggers_theme_rerender_when_wired() {
+        // Wiring a `ThemeRenderTrigger` is what guarantees dual GTK 3 +
+        // GTK 4 CSS ends up on disk after a pack apply (GXF-061). If this
+        // ever regresses, packs start silently dropping the GTK3 half.
+        let pack = sample_pack("re-render");
+        let storage = MockPackStorage::with_loadable(vec![pack.clone()]);
+        let customizer = MockShellCustomizer::new(vec![]);
+        let app_settings = MockAppSettings::new();
+        let trigger = MockThemeRenderTrigger::new();
+
+        let uc = build(storage, customizer, app_settings)
+            .with_theme_render_trigger(trigger.clone());
+
+        uc.apply_pack(&pack.id).await.unwrap();
+
+        assert_eq!(
+            *trigger.calls.lock().unwrap(),
+            1,
+            "apply_pack must call rerender() exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_pack_without_trigger_still_succeeds() {
+        // Headless unit-test configurations don't need a trigger — the
+        // pack apply must still succeed, it just doesn't regenerate CSS.
+        let pack = sample_pack("no-trigger");
+        let storage = MockPackStorage::with_loadable(vec![pack.clone()]);
+        let customizer = MockShellCustomizer::new(vec![]);
+        let app_settings = MockAppSettings::new();
+
+        let uc = build(storage, customizer, app_settings);
+        uc.apply_pack(&pack.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn apply_pack_swallows_trigger_failure() {
+        // A failing trigger must not abort the apply — the pack's
+        // GSettings state is already on disk, so we log and move on.
+        let pack = sample_pack("trigger-fails");
+        let storage = MockPackStorage::with_loadable(vec![pack.clone()]);
+        let customizer = MockShellCustomizer::new(vec![]);
+        let app_settings = MockAppSettings::new();
+        let trigger = MockThemeRenderTrigger::failing(AppError::Settings(
+            "writer exploded".into(),
+        ));
+
+        let uc = build(storage, customizer, app_settings)
+            .with_theme_render_trigger(trigger.clone());
+
+        // Apply still returns Ok() even when the trigger fails.
+        uc.apply_pack(&pack.id).await.unwrap();
+        assert_eq!(*trigger.calls.lock().unwrap(), 1);
     }
 
     #[test]

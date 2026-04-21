@@ -39,6 +39,17 @@ impl FilesystemThemeWriter {
         }
     }
 
+    /// Construct with explicit [`ResourcePaths`] and a `shell_theme_dir`
+    /// override. Used by integration tests to route writes into a
+    /// tempdir without mutating `$HOME` / `$XDG_*` env vars — each
+    /// parallel test sees its own isolated path table.
+    pub fn with_paths(paths: ResourcePaths, shell_theme_dir: PathBuf) -> Self {
+        Self {
+            paths,
+            shell_theme_dir,
+        }
+    }
+
     fn gtk_override_files(&self) -> GtkOverrideFiles {
         self.paths.gtk_overrides()
     }

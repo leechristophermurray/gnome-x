@@ -21,7 +21,7 @@ use crate::ports::{
     AppSettings, AppearanceSettings, BlurMyShellController, ContentRepository,
     ExternalAppThemer, ExtensionRepository, FloatingDockController, GdmThemer, LocalInstaller,
     PackStorage, PackSummary, ShellCustomizer, ShellProxy, ThemeCss, ThemeCssGenerator,
-    ThemeWriter,
+    ThemeRenderTrigger, ThemeWriter,
 };
 use crate::AppError;
 use async_trait::async_trait;
@@ -157,6 +157,38 @@ impl ThemeWriter for MockThemeWriter {
     }
     fn clear_overrides(&self) -> Result<(), AppError> {
         self.calls.lock().unwrap().push("clear_overrides".into());
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ThemeRenderTrigger
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+pub struct MockThemeRenderTrigger {
+    pub calls: Mutex<u32>,
+    pub fail_with: Mutex<Option<AppError>>,
+}
+
+impl MockThemeRenderTrigger {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+    pub fn failing(err: AppError) -> Arc<Self> {
+        Arc::new(Self {
+            calls: Mutex::new(0),
+            fail_with: Mutex::new(Some(err)),
+        })
+    }
+}
+
+impl ThemeRenderTrigger for MockThemeRenderTrigger {
+    fn rerender(&self) -> Result<(), AppError> {
+        *self.calls.lock().unwrap() += 1;
+        if let Some(e) = self.fail_with.lock().unwrap().take() {
+            return Err(e);
+        }
         Ok(())
     }
 }
