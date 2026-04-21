@@ -28,7 +28,7 @@ mod vscode_themer;
 pub mod window_decoration_probe;
 
 pub use blur_my_shell::GSettingsBlurMyShell;
-pub use chromium_themer::ChromiumThemer;
+pub use chromium_themer::{build_chromium_gtk3_css, ChromiumThemer};
 pub use dbus_shell_proxy::DbusShellProxy;
 pub use desktop_app_launcher_overrides::DesktopAppLauncherOverrides;
 pub use ego_client::EgoClient;
