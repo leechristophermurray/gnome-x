@@ -10,6 +10,7 @@ use super::common::{
     gtk_widget_color_overrides_css, gtk_widget_style_css, shell_notification_css,
     tint_shell_surfaces,
 };
+use super::gtk3::generate_gtk3_css;
 use gnomex_app::ports::{ThemeCss, ThemeCssGenerator};
 use gnomex_app::AppError;
 use gnomex_domain::ThemeSpec;
@@ -24,6 +25,7 @@ impl ThemeCssGenerator for Gnome47CssGenerator {
     fn generate(&self, spec: &ThemeSpec) -> Result<ThemeCss, AppError> {
         Ok(ThemeCss {
             gtk_css: self.gtk(spec),
+            gtk3_css: generate_gtk3_css(spec),
             shell_css: self.shell(spec),
         })
     }
