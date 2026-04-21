@@ -188,57 +188,55 @@ pub fn render_slideshow_xml(
             sunset_at,
             night_at,
         } => {
-            // GNOME interprets slideshow XMLs relative to <starttime>.
-            // Pin start to midnight local so the four transitions
-            // fire at each user-declared wall-clock moment.
-            let midnight = StartTime {
+            // GNOME interprets the XML relative to <starttime> and
+            // loops by wrapping the LAST <transition>'s `to` back to
+            // the FIRST <static>. The file MUST end on a transition
+            // (not a static) or GNOME treats the cycle as terminal
+            // and freezes — matching the Fedora / stock
+            // `/usr/share/backgrounds/*/<theme>.xml` pattern.
+            //
+            // Pin <starttime> to today at sunrise_at so at `sunrise`
+            // (t=0 relative) GNOME shows the sunrise picture. The
+            // cycle progresses through day → sunset → night → wraps
+            // back to sunrise.
+            let start = StartTime {
                 year: st.year,
                 month: st.month,
                 day: st.day,
-                hour: 0,
-                minute: 0,
+                hour: sunrise_at.hour,
+                minute: sunrise_at.minute,
                 second: 0,
             };
-            write_starttime(&mut out, midnight);
+            write_starttime(&mut out, start);
 
             let pics = slideshow.pictures();
             let transition = slideshow.transition_seconds();
-            // Seconds-since-midnight for each transition moment. The
-            // "sunrise" picture holds until `day_at`, etc. The night
-            // picture holds through midnight — its duration is
-            // (86400 - night_at) + sunrise_at so one cycle is one
-            // full day.
             let t_sr = sunrise_at.seconds_since_midnight() as f64;
             let t_d = day_at.seconds_since_midnight() as f64;
             let t_ss = sunset_at.seconds_since_midnight() as f64;
             let t_n = night_at.seconds_since_midnight() as f64;
 
-            // Sequence: [night from 00:00 to sunrise] → sunrise →
-            // day → sunset → [night from night_at to 23:59:59].
-            // Wrapping this way keeps the total at 24 h * 3600 s.
-            let night_pre = t_sr;
+            // Static durations are the held-picture times. Each one
+            // runs from its own start moment to the next boundary
+            // minus the cross-fade transition that follows it.
             let sunrise_dur = (t_d - t_sr - transition).max(1.0);
             let day_dur = (t_ss - t_d - transition).max(1.0);
             let sunset_dur = (t_n - t_ss - transition).max(1.0);
-            let night_post = (86_400.0 - t_n - transition).max(1.0);
+            // Night spans from night_at through midnight back to
+            // sunrise_at of the NEXT day. Subtract the wrap transition.
+            let night_dur = (86_400.0 - (t_n - t_sr) - transition).max(1.0);
 
-            // 00:00 – sunrise: show the night picture (wrap).
-            write_static(&mut out, night_pre, &pics[3]);
-            write_transition(&mut out, transition, &pics[3], &pics[0]);
-            // sunrise – day: sunrise picture.
+            // 4 statics + 4 transitions in alternating order. The
+            // final transition wraps from night → sunrise so GNOME
+            // knows to loop back to the first static.
             write_static(&mut out, sunrise_dur, &pics[0]);
             write_transition(&mut out, transition, &pics[0], &pics[1]);
-            // day – sunset: day picture.
             write_static(&mut out, day_dur, &pics[1]);
             write_transition(&mut out, transition, &pics[1], &pics[2]);
-            // sunset – night: sunset picture.
             write_static(&mut out, sunset_dur, &pics[2]);
             write_transition(&mut out, transition, &pics[2], &pics[3]);
-            // night – midnight wrap: night picture.
-            write_static(&mut out, night_post, &pics[3]);
-            // GNOME loops back to the first <static> after the last
-            // <transition>; we don't emit a night→night transition
-            // because it would be a no-op.
+            write_static(&mut out, night_dur, &pics[3]);
+            write_transition(&mut out, transition, &pics[3], &pics[0]);
         }
     }
 
@@ -425,7 +423,10 @@ mod tests {
     }
 
     #[test]
-    fn time_of_day_xml_pins_starttime_to_midnight() {
+    fn time_of_day_xml_pins_starttime_to_sunrise_at() {
+        // tod_slideshow has sunrise_at = 06:00; <starttime> must be
+        // today at 06:00 so GNOME's cycle phase lines up with the
+        // user's declared moments.
         let xml = render_slideshow_xml(
             &tod_slideshow(),
             &FixedClock(StartTime {
@@ -437,11 +438,10 @@ mod tests {
                 second: 0,
             }),
         );
-        // Date survives from the clock, but h/m/s forced to 00:00:00.
         assert!(xml.contains("<year>2030</year>"));
         assert!(xml.contains("<month>3</month>"));
         assert!(xml.contains("<day>15</day>"));
-        assert!(xml.contains("<hour>0</hour>"));
+        assert!(xml.contains("<hour>6</hour>"));
         assert!(xml.contains("<minute>0</minute>"));
         assert!(xml.contains("<second>0</second>"));
     }
@@ -452,19 +452,40 @@ mod tests {
             &tod_slideshow(),
             &FixedClock(StartTime::EPOCH),
         );
-        // Ordered: night pre-wrap → sunrise → day → sunset → night post-wrap.
-        // Assert by sequence: find each file name's first occurrence
-        // and confirm the expected ordering.
-        let night_pre = xml.find("/p/night.jpg").unwrap();
+        // Ordered: sunrise → day → sunset → night, ending with a
+        // wrap transition back to sunrise.
         let sunrise = xml.find("/p/sunrise.jpg").unwrap();
         let day = xml.find("/p/day.jpg").unwrap();
         let sunset = xml.find("/p/sunset.jpg").unwrap();
-        assert!(night_pre < sunrise, "night (pre-wrap) must precede sunrise");
+        let night = xml.find("/p/night.jpg").unwrap();
         assert!(sunrise < day);
         assert!(day < sunset);
-        // And night shows up again after sunset for the post-wrap.
-        let after_sunset = &xml[sunset..];
-        assert!(after_sunset.contains("/p/night.jpg"));
+        assert!(sunset < night);
+
+        // The XML must END with a <transition>, not a <static> —
+        // otherwise GNOME's slideshow engine treats the cycle as
+        // terminal and freezes on the last static.
+        let trimmed = xml.trim_end().trim_end_matches("</background>").trim_end();
+        assert!(
+            trimmed.ends_with("</transition>"),
+            "XML must end on a <transition> so GNOME loops — got tail: {:?}",
+            &trimmed[trimmed.len().saturating_sub(60)..],
+        );
+    }
+
+    #[test]
+    fn time_of_day_xml_wraps_from_night_to_sunrise() {
+        let xml = render_slideshow_xml(
+            &tod_slideshow(),
+            &FixedClock(StartTime::EPOCH),
+        );
+        // Last <transition> block must go night → sunrise so the
+        // cycle wraps on loop. Scrape from the last <transition> tag
+        // to end and look for both filenames.
+        let last_trans = xml.rfind("<transition").unwrap();
+        let tail = &xml[last_trans..];
+        assert!(tail.contains("<from>/p/night.jpg</from>"));
+        assert!(tail.contains("<to>/p/sunrise.jpg</to>"));
     }
 
     #[test]
