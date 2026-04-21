@@ -15,11 +15,12 @@ use gnomex_app::use_cases::{
     ApplyThemeUseCase, BrowseUseCase, CustomizeShellUseCase, CustomizeUseCase, ManageUseCase,
     PacksUseCase, WallpaperSlideshowUseCase,
 };
+use gnomex_app::ports::ThemeRenderTrigger;
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, DesktopAppLauncherOverrides, EgoClient, FilesystemInstaller,
-    FilesystemThemeWriter, GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell,
-    GSettingsFloatingDock, GSettingsMutter, GioThemingConflictDetector, OcsClient,
-    PackTomlStorage, PkexecGdmThemer, VscodeThemer, WmctrlDecorationProbe,
+    FilesystemThemeWriter, FsThemeRenderTrigger, GSettingsAppSettings, GSettingsAppearance,
+    GSettingsBlurMyShell, GSettingsFloatingDock, GSettingsMutter, GioThemingConflictDetector,
+    OcsClient, PackTomlStorage, PkexecGdmThemer, VscodeThemer, WmctrlDecorationProbe,
     XdgWallpaperSlideshowWriter,
 };
 use std::sync::Arc;
@@ -121,23 +122,33 @@ impl AppServices {
         // into `PacksUseCase`.
         let installer_for_ui: Arc<dyn LocalInstaller> = installer.clone();
 
-        let packs = Arc::new(PacksUseCase::new(
-            pack_storage,
-            appearance.clone(),
-            shell_proxy,
-            installer,
-            ocs_client,
-            app_settings,
-            shell_customizer,
-        ));
-
+        // `ApplyThemeUseCase` needs to land before `PacksUseCase` so
+        // the packs path can borrow it through a `ThemeRenderTrigger`
+        // adapter. That's what wires pack-apply → dual GTK 4 + GTK 3
+        // CSS regen (GXF-061).
         let apply_theme = Arc::new(
-            ApplyThemeUseCase::new(css_generator, theme_writer, appearance)
+            ApplyThemeUseCase::new(css_generator, theme_writer, appearance.clone())
                 .with_external_themer(Arc::new(VscodeThemer::new()))
                 .with_external_themer(Arc::new(ChromiumThemer::new()))
                 .with_mutter_settings(Arc::new(GSettingsMutter::new()))
                 .with_app_launcher_overrides(Arc::new(DesktopAppLauncherOverrides::new()))
                 .with_gdm_themer(Arc::new(PkexecGdmThemer::new())),
+        );
+
+        let theme_render_trigger: Arc<dyn ThemeRenderTrigger> =
+            Arc::new(FsThemeRenderTrigger::new(apply_theme.clone()));
+
+        let packs = Arc::new(
+            PacksUseCase::new(
+                pack_storage,
+                appearance,
+                shell_proxy,
+                installer,
+                ocs_client,
+                app_settings,
+                shell_customizer,
+            )
+            .with_theme_render_trigger(theme_render_trigger),
         );
 
         let conflict_detector: Arc<dyn ThemingConflictDetector> =

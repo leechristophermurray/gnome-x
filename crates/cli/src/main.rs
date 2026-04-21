@@ -10,20 +10,15 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use gio::prelude::*;
-use gnomex_app::ports::{ShellCustomizer, ShellProxy};
+use gnomex_app::ports::{ShellCustomizer, ShellProxy, ThemeRenderTrigger};
 use gnomex_app::use_cases::gdm_theme;
 use gnomex_app::use_cases::{ApplyThemeUseCase, CustomizeShellUseCase, PacksUseCase};
-use gnomex_domain::{
-    DashSpec, ForegroundSpec, HeaderbarSpec, HexColor, InsetSpec, LayerSeparationSpec,
-    NotificationSpec, Opacity, PanelSpec, PerAppScaleOverride, Radius, ScaleFactor, ScalingSpec,
-    SidebarSpec, StatusColorSpec, TextScaling, ThemeSpec, TintSpec, WidgetColorOverrides,
-    WidgetStyleSpec, WindowFrameSpec,
-};
+use gnomex_domain::ThemeSpec;
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, DesktopAppLauncherOverrides, EgoClient, FilesystemInstaller,
-    FilesystemThemeWriter, GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell,
-    GSettingsFloatingDock, GSettingsMutter, OcsClient, PackTomlStorage, PkexecGdmThemer,
-    VscodeThemer,
+    FilesystemThemeWriter, FsThemeRenderTrigger, GSettingsAppSettings, GSettingsAppearance,
+    GSettingsBlurMyShell, GSettingsFloatingDock, GSettingsMutter, OcsClient, PackTomlStorage,
+    PkexecGdmThemer, VscodeThemer,
 };
 use std::sync::Arc;
 
@@ -195,14 +190,13 @@ fn handle_pack(action: PackAction) -> Result<()> {
             }
         }
         PackAction::Apply { id } => {
+            // The use case's `ThemeRenderTrigger` (wired in
+            // `build_packs_use_case`) takes care of regenerating
+            // GTK 4 + GTK 3 CSS from the just-restored tb-* values
+            // (GXF-061).
             runtime
                 .block_on(packs_uc.apply_pack(&id))
                 .context("failed to apply pack")?;
-            // Regenerate the theme CSS so the just-restored tb-* values
-            // take visual effect immediately.
-            let apply_uc = build_apply_theme_use_case()?;
-            let spec = build_spec_from_gsettings()?;
-            apply_uc.apply(&spec).context("post-pack theme apply failed")?;
             println!("Pack '{id}' applied (theme re-rendered).");
         }
     }
@@ -445,6 +439,14 @@ fn build_packs_use_case(handle: tokio::runtime::Handle) -> Result<PacksUseCase> 
             .context("failed to connect to GNOME Shell D-Bus")?,
     );
     let _ = ego_client; // reserved for future pack operations that need EGO
+
+    // Wire a theme-render trigger so `apply_pack` regenerates both
+    // `gtk-4.0/gtk.css` and `gtk-3.0/gtk.css` from the pack's
+    // restored tb-* values (GXF-061).
+    let apply_theme = Arc::new(build_apply_theme_use_case()?);
+    let trigger: Arc<dyn ThemeRenderTrigger> =
+        Arc::new(FsThemeRenderTrigger::new(apply_theme));
+
     Ok(PacksUseCase::new(
         pack_storage,
         appearance,
@@ -453,7 +455,8 @@ fn build_packs_use_case(handle: tokio::runtime::Handle) -> Result<PacksUseCase> 
         ocs_client,
         app_settings,
         shell_customizer,
-    ))
+    )
+    .with_theme_render_trigger(trigger))
 }
 
 /// Detect the running GNOME Shell major version via D-Bus, falling back to 47.
@@ -471,139 +474,12 @@ fn detect_shell_version() -> gnomex_domain::ShellVersion {
 }
 
 /// Build a ThemeSpec from the current GSettings tb-* keys.
+///
+/// Delegates to `gnomex_infra::gsettings_theme_spec::build_theme_spec_from_gsettings`
+/// so the CLI and the pack-apply `FsThemeRenderTrigger` emit
+/// byte-identical CSS for the same settings — the tb-* parsing logic
+/// lives in exactly one place.
 fn build_spec_from_gsettings() -> Result<ThemeSpec> {
-    let app = gio::Settings::new(APP_SCHEMA);
-    let iface = gio::Settings::new(IFACE_SCHEMA);
-    let accent_name = iface.string("accent-color").to_string();
-    let accent_hex = accent_name_to_hex(&accent_name);
-
-    Ok(ThemeSpec {
-        window_radius: Radius::new(app.double("tb-window-radius"))?,
-        element_radius: Radius::new(app.double("tb-element-radius"))?,
-        panel: PanelSpec {
-            radius: Radius::new(app.double("tb-panel-radius"))?,
-            opacity: Opacity::from_percent(app.double("tb-panel-opacity"))?,
-            tint: HexColor::new(&app.string("tb-panel-tint"))?,
-        },
-        dash: DashSpec {
-            opacity: Opacity::from_percent(app.double("tb-dash-opacity"))?,
-        },
-        tint: TintSpec {
-            accent_hex: HexColor::new(&accent_hex)?,
-            intensity: Opacity::from_percent(app.double("tb-tint-intensity"))?,
-        },
-        headerbar: HeaderbarSpec {
-            min_height: Radius::new(app.double("tb-headerbar-height"))?,
-            shadow_intensity: Opacity::from_fraction(app.double("tb-headerbar-shadow"))?,
-            circular_buttons: app.boolean("tb-circular-buttons"),
-        },
-        window_frame: WindowFrameSpec {
-            show_shadow: app.boolean("tb-show-window-shadow"),
-            inset_border: Radius::new(app.double("tb-inset-border"))?,
-        },
-        insets: InsetSpec {
-            card_border_width: Radius::new(app.double("tb-card-border-width"))?,
-            separator_opacity: Opacity::from_percent(app.double("tb-separator-opacity"))?,
-            focus_ring_width: Radius::new(app.double("tb-focus-ring-width"))?,
-            combo_inset: app.boolean("tb-combo-inset"),
-        },
-        foreground: ForegroundSpec::default(),
-        layers: LayerSeparationSpec {
-            headerbar_bottom: Radius::new(app.double("tb-layer-headerbar-bottom"))?,
-            sidebar_divider: Radius::new(app.double("tb-layer-sidebar-divider"))?,
-            content_contrast: Opacity::from_fraction(app.double("tb-layer-content-contrast"))?,
-        },
-        widget_style: WidgetStyleSpec {
-            input_inset: Opacity::from_fraction(app.double("tb-widget-input-inset"))?,
-            button_raise: Opacity::from_fraction(app.double("tb-widget-button-raise"))?,
-            headerbar_gradient: Opacity::from_fraction(app.double("tb-widget-headerbar-gradient"))?,
-        },
-        widget_colors: WidgetColorOverrides {
-            button_bg_light: parse_optional_hex(&app.string("tb-color-button-bg-light"))?,
-            button_bg_dark: parse_optional_hex(&app.string("tb-color-button-bg-dark"))?,
-            entry_bg_light: parse_optional_hex(&app.string("tb-color-entry-bg-light"))?,
-            entry_bg_dark: parse_optional_hex(&app.string("tb-color-entry-bg-dark"))?,
-            headerbar_bg_light: parse_optional_hex(&app.string("tb-color-headerbar-bg-light"))?,
-            headerbar_bg_dark: parse_optional_hex(&app.string("tb-color-headerbar-bg-dark"))?,
-            sidebar_bg_light: parse_optional_hex(&app.string("tb-color-sidebar-bg-light"))?,
-            sidebar_bg_dark: parse_optional_hex(&app.string("tb-color-sidebar-bg-dark"))?,
-        },
-        sidebar: SidebarSpec {
-            opacity: Opacity::from_fraction(app.double("tb-sidebar-opacity"))?,
-            fg_override: {
-                let raw = app.string("tb-sidebar-fg-override").to_string();
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(HexColor::new(trimmed)?)
-                }
-            },
-        },
-        status_colors: StatusColorSpec::default(),
-        notifications: NotificationSpec {
-            radius: Radius::new(app.double("tb-notification-radius"))?,
-            opacity: Opacity::from_fraction(app.double("tb-notification-opacity"))?,
-        },
-        overview_blur: app.boolean("tb-overview-blur"),
-        scaling: build_scaling_from_gsettings(&app)?,
-    })
-}
-
-/// Parse the scaling tb-* keys into a validated `ScalingSpec`. The
-/// per-app list lives in a strv as `"APP_ID:SCALE"` entries; invalid
-/// entries are logged and skipped so a typo in dconf can't break the
-/// whole apply.
-fn build_scaling_from_gsettings(app: &gio::Settings) -> Result<ScalingSpec> {
-    let text_scaling = TextScaling::new(app.double("tb-scaling-text-factor"))?;
-    let mut per_app = Vec::new();
-    for entry in app.strv("tb-scaling-per-app-overrides").iter() {
-        let raw = entry.as_str();
-        let Some((id, scale_s)) = raw.split_once(':') else {
-            tracing::warn!("skipping malformed per-app-override entry: {raw}");
-            continue;
-        };
-        let Ok(scale_f) = scale_s.trim().parse::<f64>() else {
-            tracing::warn!("skipping per-app-override with unparseable scale: {raw}");
-            continue;
-        };
-        match ScaleFactor::new(scale_f) {
-            Ok(scale) => per_app.push(PerAppScaleOverride {
-                app_id: id.trim().to_owned(),
-                scale,
-            }),
-            Err(e) => tracing::warn!("rejecting per-app-override for {id}: {e}"),
-        }
-    }
-    Ok(ScalingSpec {
-        text_scaling,
-        scale_monitor_framebuffer: app.boolean("tb-scaling-monitor-framebuffer"),
-        x11_randr_fractional_scaling: app.boolean("tb-scaling-x11-fractional"),
-        per_app_overrides: per_app,
-    })
-}
-
-fn parse_optional_hex(raw: &str) -> Result<Option<HexColor>> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(HexColor::new(trimmed).context("invalid hex override")?))
-    }
-}
-
-fn accent_name_to_hex(name: &str) -> String {
-    match name {
-        "blue" => "#3584e4",
-        "teal" => "#2190a4",
-        "green" => "#3a944a",
-        "yellow" => "#c88800",
-        "orange" => "#ed5b00",
-        "red" => "#e62d42",
-        "pink" => "#d56199",
-        "purple" => "#9141ac",
-        "slate" => "#6f8396",
-        _ => "#3584e4",
-    }
-    .to_owned()
+    gnomex_infra::gsettings_theme_spec::build_theme_spec_from_gsettings()
+        .context("reading tb-* gsettings")
 }
