@@ -25,6 +25,8 @@ zip = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 gio = { workspace = true }
+gdk-pixbuf = { workspace = true }
+anyhow = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 directories = { workspace = true }

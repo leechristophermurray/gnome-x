@@ -2242,6 +2242,19 @@ impl SimpleComponent for ThemeBuilderModel {
                     Ok(_) => tracing::info!("accent color set to: {color}"),
                     Err(e) => tracing::warn!("failed to set accent color: {e}"),
                 }
+                // Clear the wallpaper-palette lock — the stock accent
+                // button / manual pick is an explicit override of the
+                // wallpaper-driven choice. The daemon treats -1 as
+                // "use the dominant on the next wallpaper change".
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                if app
+                    .settings_schema()
+                    .map(|s| s.has_key("wallpaper-accent-index"))
+                    .unwrap_or(false)
+                    && app.int("wallpaper-accent-index") != -1
+                {
+                    let _ = app.set_int("wallpaper-accent-index", -1);
+                }
             }
             ThemeBuilderMsg::ExtractFromWallpaper => {
                 let bg = gio::Settings::new("org.gnome.desktop.background");
@@ -2252,13 +2265,28 @@ impl SimpleComponent for ThemeBuilderModel {
                     .to_owned();
 
                 let sender = sender.input_sender().clone();
-                // Run extraction off the main thread since it loads an image
+                // Run extraction off the main thread since it loads an
+                // image — and when the URI is a slideshow XML the
+                // shared helper also parses the XML to resolve the
+                // currently-active still.
                 std::thread::spawn(move || {
-                    match extract_wallpaper_colors(&path) {
-                        Ok(colors) => sender.emit(ThemeBuilderMsg::WallpaperColorsReady(colors)),
-                        Err(e) => {
-                            tracing::warn!("wallpaper extraction failed: {e}");
+                    match gnomex_infra::wallpaper_palette::resolve_wallpaper_image(&path) {
+                        Ok(Some(image)) => {
+                            match gnomex_infra::wallpaper_palette::extract_palette(&image) {
+                                Ok(entries) => {
+                                    let colors: Vec<(String, String)> = entries
+                                        .into_iter()
+                                        .map(|e| (e.hex, e.accent_id))
+                                        .collect();
+                                    sender.emit(ThemeBuilderMsg::WallpaperColorsReady(colors));
+                                }
+                                Err(e) => tracing::warn!("wallpaper extraction failed: {e}"),
+                            }
                         }
+                        Ok(None) => {
+                            tracing::warn!("slideshow XML had no current picture entry");
+                        }
+                        Err(e) => tracing::warn!("resolve wallpaper URI failed: {e}"),
                     }
                 });
             }
@@ -2325,16 +2353,35 @@ impl SimpleComponent for ThemeBuilderModel {
                             }
                         }
 
-                        let sender = sender.clone();
                         let aid = accent_id.clone();
                         let pickers = pickers.clone();
+                        let swatch_index = i as i32;
                         btn.connect_toggled(move |b| {
                             if b.is_active() {
                                 // Deselect all color picker toggles
                                 for picker in &pickers {
                                     color_picker::deselect_all(picker);
                                 }
-                                sender.input(ThemeBuilderMsg::SetAccentColor(aid.clone()));
+                                // Persist the palette INDEX the user
+                                // picked, so the daemon can re-apply
+                                // the same slot when the wallpaper
+                                // changes. We write accent-color and
+                                // the lock *directly* here rather than
+                                // going through SetAccentColor, because
+                                // that handler resets the lock to -1.
+                                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                                if app
+                                    .settings_schema()
+                                    .map(|s| s.has_key("wallpaper-accent-index"))
+                                    .unwrap_or(false)
+                                {
+                                    let _ = app.set_int("wallpaper-accent-index", swatch_index);
+                                }
+                                let iface = gio::Settings::new("org.gnome.desktop.interface");
+                                let _ = iface.set_string("accent-color", &aid);
+                                tracing::info!(
+                                    "accent locked to wallpaper palette[{swatch_index}] → {aid}",
+                                );
                             }
                         });
 
@@ -3039,54 +3086,6 @@ fn build_spin_row(
         .build()
 }
 
-// --- Wallpaper color extraction (Material You style) ---
-
-/// Extract dominant colors from a wallpaper image and map them to GNOME accent colors.
-fn extract_wallpaper_colors(path: &str) -> Result<Vec<(String, String)>, String> {
-    use gnomex_domain::color::{rgb_to_hsv, hsv_to_rgb};
-
-    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(path, 64, 64, true)
-        .map_err(|e| format!("failed to load wallpaper: {e}"))?;
-
-    let pixels = pixbuf.pixel_bytes().ok_or("no pixel data")?;
-    let channels = pixbuf.n_channels() as usize;
-    let data = pixels.as_ref();
-
-    let mut color_buckets: std::collections::HashMap<(u16, u8, u8), u32> =
-        std::collections::HashMap::new();
-
-    for chunk in data.chunks_exact(channels) {
-        if channels < 3 { continue; }
-        let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
-        let (h, s, v) = rgb_to_hsv(r, g, b);
-        if s < 15 || v < 25 || v > 240 { continue; }
-        let hue_bin = (h / 10) * 10;
-        let sat_bin = (s / 85).min(2);
-        let val_bin = (v / 85).min(2);
-        *color_buckets.entry((hue_bin, sat_bin, val_bin)).or_default() += 1;
-    }
-
-    let mut buckets: Vec<_> = color_buckets.into_iter().collect();
-    buckets.sort_by(|a, b| b.1.cmp(&a.1));
-
-    let mut results = Vec::new();
-    let mut used_accents = std::collections::HashSet::new();
-
-    for ((hue_bin, sat_bin, val_bin), _) in buckets.iter().take(15) {
-        let h = *hue_bin + 5;
-        let s = (*sat_bin as u16) * 85 + 42;
-        let v = (*val_bin as u16) * 85 + 42;
-        let (r, g, b) = hsv_to_rgb(h, s.min(255) as u8, v.min(255) as u8);
-        let hex = format!("#{:02x}{:02x}{:02x}", r, g, b);
-        let accent_id = closest_accent(r, g, b);
-        if used_accents.contains(&accent_id) { continue; }
-        used_accents.insert(accent_id.clone());
-        results.push((hex, accent_id));
-        if results.len() >= 5 { break; }
-    }
-
-    Ok(results)
-}
 
 /// Parse the `cached-wallpaper-palette` GSetting strv back into the
 /// `Vec<(hex, accent_id)>` shape the UI renders. Silently skips
@@ -3188,24 +3187,4 @@ fn refresh_per_app_listbox(
         row.add_suffix(&remove);
         list.append(&row);
     }
-}
-
-fn closest_accent(r: u8, g: u8, b: u8) -> String {
-    use gnomex_domain::color::color_distance;
-
-    let mut best_id = "blue";
-    let mut best_dist = u32::MAX;
-
-    for &(id, _, hex) in ACCENT_COLORS {
-        let accent = gnomex_domain::HexColor::new(hex)
-            .map(|c| c.to_rgb())
-            .unwrap_or((0, 0, 0));
-        let dist = color_distance((r, g, b), accent);
-        if dist < best_dist {
-            best_dist = dist;
-            best_id = id;
-        }
-    }
-
-    best_id.to_owned()
 }
