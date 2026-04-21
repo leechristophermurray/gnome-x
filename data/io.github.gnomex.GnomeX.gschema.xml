@@ -210,6 +210,11 @@
       <summary>Auto accent from wallpaper</summary>
       <description>Let the experienced daemon re-extract the accent color when the wallpaper changes</description>
     </key>
+    <key name="tb-recolor-icons" type="b">
+      <default>false</default>
+      <summary>Recolour folder / accent icons on theme apply</summary>
+      <description>When enabled, applying a theme also recolours the active icon theme's folder/accent icons to match the GNOME accent. Adwaita (GNOME 47+) tracks `accent-color` natively; Papirus is recoloured by shelling out to `papirus-folders`. Other themes report "not supported" but the apply still succeeds.</description>
+    </key>
     <key name="tb-floating-dock-enabled" type="b">
       <default>false</default>
       <summary>Floating dock</summary>

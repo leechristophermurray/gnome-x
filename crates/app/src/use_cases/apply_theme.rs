@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ports::{
-    AppLauncherOverrides, AppearanceSettings, ExternalAppThemer, GdmThemer, MutterSettings,
-    ThemeCssGenerator, ThemeWriter,
+    AppLauncherOverrides, AppearanceSettings, ExternalAppThemer, GdmThemer, IconThemeRecolorer,
+    MutterSettings, RecolorOutcome, ThemeCssGenerator, ThemeWriter,
 };
 use crate::AppError;
 use gnomex_domain::{ExternalThemeSpec, ScalingSpec, ThemeSpec};
@@ -37,6 +37,12 @@ pub struct ApplyThemeUseCase {
     /// the use case forwards the accent + theme-name to the GDM
     /// dconf database. See GXF-003.
     gdm: Option<Arc<dyn GdmThemer>>,
+    /// Optional icon-theme recolouring adapter. Off by default so
+    /// headless tests and users who prefer a hands-off icon theme
+    /// don't see spurious shell-outs. When present AND the caller
+    /// passes the accent id via `recolor_icons`, the adapter
+    /// decides whether to shell out (Papirus) or no-op (Adwaita).
+    icon_recolorer: Option<Arc<dyn IconThemeRecolorer>>,
 }
 
 impl ApplyThemeUseCase {
@@ -53,6 +59,7 @@ impl ApplyThemeUseCase {
             mutter: None,
             app_launcher: None,
             gdm: None,
+            icon_recolorer: None,
         }
     }
 
@@ -88,6 +95,35 @@ impl ApplyThemeUseCase {
     pub fn with_gdm_themer(mut self, gdm: Arc<dyn GdmThemer>) -> Self {
         self.gdm = Some(gdm);
         self
+    }
+
+    /// Register the icon-theme recolouring adapter. Without it,
+    /// [`recolor_icons`] is a no-op.
+    pub fn with_icon_recolorer(mut self, r: Arc<dyn IconThemeRecolorer>) -> Self {
+        self.icon_recolorer = Some(r);
+        self
+    }
+
+    /// Recolour the folder / accent icons of the currently-active
+    /// icon theme to match `accent_id`. Safe to call when the
+    /// recolorer port is absent — returns `Ok(None)`.
+    ///
+    /// The optional caller-provided flag `enabled` short-circuits
+    /// the whole path when the user has turned the toggle off, so
+    /// callers can pass the flag through without branching.
+    pub fn recolor_icons(
+        &self,
+        accent_id: &str,
+        enabled: bool,
+    ) -> Result<Option<RecolorOutcome>, AppError> {
+        if !enabled {
+            return Ok(None);
+        }
+        let Some(r) = &self.icon_recolorer else {
+            return Ok(None);
+        };
+        let outcome = r.recolor(accent_id)?;
+        Ok(Some(outcome))
     }
 
     /// Generate version-specific CSS and write it to disk. Then fan out to

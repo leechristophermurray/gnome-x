@@ -48,6 +48,8 @@ pub struct ThemeBuilderModel {
     tint_intensity: f64,
     dash_opacity: f64,
     overview_blur: bool,
+    // Icon theme recolour — applies the accent to folder icons on Apply.
+    recolor_icons: bool,
     // Headerbar / CSD
     headerbar_height: f64,
     headerbar_shadow: f64,
@@ -146,6 +148,7 @@ pub enum ThemeBuilderMsg {
     SetTintIntensity(f64),
     SetDashOpacity(f64),
     SetOverviewBlur(bool),
+    SetRecolorIcons(bool),
     SetFloatingDock(bool),
     SetSharedTinting(bool),
     RefreshVisibility,
@@ -533,6 +536,29 @@ impl SimpleComponent for ThemeBuilderModel {
             .build();
         sched_info.add_prefix(&gtk::Image::from_icon_name("preferences-system-time-symbolic"));
         accent_group.add(&sched_info);
+
+        // === Folder icon recolour toggle ===
+        // Live under the accent group because the behaviour is tied
+        // to the chosen accent. Subtitle spells out which themes
+        // actually honour the toggle so the user knows whether a
+        // non-Adwaita / non-Papirus theme will do anything.
+        let recolor_row = adw::SwitchRow::builder()
+            .title("Apply accent to folder icons")
+            .subtitle(
+                "Recolour folder / accent icons on every theme apply. \
+                 Adwaita (GNOME 47+) tracks the accent natively. \
+                 Papirus uses the `papirus-folders` helper. Other \
+                 icon themes will show a hint instead.",
+            )
+            .active(app_settings.boolean("tb-recolor-icons"))
+            .build();
+        {
+            let sender = sender.clone();
+            recolor_row.connect_active_notify(move |r| {
+                sender.input(ThemeBuilderMsg::SetRecolorIcons(r.is_active()));
+            });
+        }
+        accent_group.add(&recolor_row);
 
         // appended in final ordering
 
@@ -2132,6 +2158,7 @@ impl SimpleComponent for ThemeBuilderModel {
             tint_intensity: app_settings.double("tb-tint-intensity"),
             dash_opacity: app_settings.double("tb-dash-opacity"),
             overview_blur: app_settings.boolean("tb-overview-blur"),
+            recolor_icons: app_settings.boolean("tb-recolor-icons"),
             headerbar_height: app_settings.double("tb-headerbar-height"),
             headerbar_shadow: app_settings.double("tb-headerbar-shadow"),
             circular_buttons: app_settings.boolean("tb-circular-buttons"),
@@ -2432,6 +2459,11 @@ impl SimpleComponent for ThemeBuilderModel {
                         tracing::warn!("blur my shell apply failed: {e}");
                     }
                 }
+            }
+            ThemeBuilderMsg::SetRecolorIcons(v) => {
+                self.recolor_icons = v;
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_boolean("tb-recolor-icons", v);
             }
             ThemeBuilderMsg::SetFloatingDock(enabled) => {
                 // Persist the toggle even if neither our extension nor
@@ -2874,6 +2906,35 @@ impl SimpleComponent for ThemeBuilderModel {
                             let _ = sender.output(ThemeBuilderOutput::Toast(
                                 format!("Theme applied ({ver}) \u{2014} restart apps to see changes"),
                             ));
+                            // Icon recolour is a best-effort side
+                            // channel — we toast the user about the
+                            // outcome but never fail the main apply.
+                            if self.recolor_icons {
+                                let iface = gio::Settings::new("org.gnome.desktop.interface");
+                                let accent = iface.string("accent-color").to_string();
+                                match self.apply_uc.recolor_icons(&accent, true) {
+                                    Ok(Some(outcome)) => {
+                                        use gnomex_app::ports::RecolorOutcome;
+                                        let msg = match outcome {
+                                            RecolorOutcome::Applied(t) => {
+                                                format!("Recoloured folder icons via {t}")
+                                            }
+                                            RecolorOutcome::NativelyTracks(t) => format!(
+                                                "{t} icons follow the accent natively"
+                                            ),
+                                            RecolorOutcome::Unsupported(t) => format!(
+                                                "{t} doesn't support folder recolour \u{2014} install Adwaita or Papirus"
+                                            ),
+                                        };
+                                        let _ = sender
+                                            .output(ThemeBuilderOutput::Toast(msg));
+                                    }
+                                    Ok(None) => {}
+                                    Err(e) => {
+                                        tracing::warn!("icon recolour failed: {e}");
+                                    }
+                                }
+                            }
                         }
                         Err(e) => {
                             let _ = sender
