@@ -23,6 +23,7 @@ pub mod theme_paths;
 mod theme_writer;
 mod theming_conflict_detector;
 mod vscode_themer;
+pub mod window_decoration_probe;
 
 pub use blur_my_shell::GSettingsBlurMyShell;
 pub use chromium_themer::ChromiumThemer;
@@ -37,3 +38,4 @@ pub use pack_toml_storage::PackTomlStorage;
 pub use theme_writer::FilesystemThemeWriter;
 pub use theming_conflict_detector::GioThemingConflictDetector;
 pub use vscode_themer::VscodeThemer;
+pub use window_decoration_probe::WmctrlDecorationProbe;

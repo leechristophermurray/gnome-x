@@ -4,6 +4,7 @@
 pub mod color_picker;
 pub mod content_row;
 pub mod detail_view;
+pub mod diagnostics;
 pub mod explore;
 pub mod extension_row;
 pub mod installed;
