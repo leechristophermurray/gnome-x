@@ -28,6 +28,7 @@ pub mod theme_paths;
 mod theme_writer;
 mod theming_conflict_detector;
 mod vscode_themer;
+pub mod wallpaper_palette;
 pub mod wallpaper_slideshow_xml;
 pub mod window_decoration_probe;
 

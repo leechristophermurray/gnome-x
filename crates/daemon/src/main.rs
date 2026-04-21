@@ -19,11 +19,14 @@
 //! Architecture: pure composition of existing domain+app+infra crates.
 
 use anyhow::{Context, Result};
-use gdk_pixbuf::Pixbuf;
 use gio::prelude::*;
 use gnomex_app::ports::ExternalAppThemer;
 use gnomex_domain::{color, ColorScheme, ExternalThemeSpec, HexColor};
+use gnomex_infra::wallpaper_palette::{
+    encode_palette, extract_palette, locked_accent, resolve_wallpaper_image, PaletteEntry,
+};
 use gnomex_infra::{ChromiumThemer, VscodeThemer};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -145,62 +148,197 @@ fn setup_accent_schedule_watcher(
 }
 
 /// Watch wallpaper changes. On every change we:
-///   1. extract the top-N palette (always) and cache to
-///      `cached-wallpaper-palette` so the UI can show swatches
-///      immediately without running its own extraction.
-///   2. if the user has `use-wallpaper-accent` enabled, also pick the
-///      dominant match and write it to `accent-color`.
+///   1. resolve the current image (handling slideshow `.xml`);
+///   2. extract the top-N palette (always) and cache it to
+///      `cached-wallpaper-palette` so the UI can paint swatches
+///      immediately without re-running extraction;
+///   3. if `use-wallpaper-accent` is enabled, write the accent —
+///      using `wallpaper-accent-index` to pick the locked swatch when
+///      the user previously clicked one, otherwise the dominant.
+///
+/// We also install a slideshow-interval tick: when `picture-uri`
+/// points to a GNOME slideshow `.xml`, GNOME cycles images internally
+/// *without* changing the GSetting, so `connect_changed` never fires.
+/// The tick re-resolves the current image on the slideshow's own
+/// cadence and reruns steps 2 and 3.
 fn setup_wallpaper_watcher() {
     let bg_settings = Rc::new(gio::Settings::new(BG_SCHEMA));
     let app_settings = Rc::new(gio::Settings::new(APP_SCHEMA));
 
-    let app_clone = app_settings.clone();
-    let bg_clone = bg_settings.clone();
-    bg_settings.clone().connect_changed(Some("picture-uri"), move |_, _| {
-        let uri = bg_clone.string("picture-uri").to_string();
-        let Some(path) = uri.strip_prefix("file://") else {
-            return;
-        };
-        tracing::info!("wallpaper changed: {uri}");
+    // Track the current slideshow tick so we can replace it when the
+    // wallpaper (or interval) changes.
+    let slideshow_tick: Rc<RefCell<Option<glib::SourceId>>> =
+        Rc::new(RefCell::new(None));
 
-        // --- Always: extract palette and cache it. ---
-        match extract_wallpaper_palette(path) {
-            Ok(palette) if !palette.is_empty() => {
-                // GSettings 'as' array — one entry per (hex, accent_id)
-                // pair, delimited with ':' so UI can parse cheaply.
-                let encoded: Vec<String> = palette
-                    .iter()
-                    .map(|(hex, id)| format!("{hex}:{id}"))
-                    .collect();
+    // One code-path for "wallpaper is different now — re-extract and
+    // maybe re-apply". Called from both the `picture-uri` watcher and
+    // the slideshow tick.
+    let reapply = {
+        let bg = bg_settings.clone();
+        let app = app_settings.clone();
+        Rc::new(move |reason: &str| {
+            let uri = bg.string("picture-uri").to_string();
+            let Some(image) = resolve_image(&uri) else {
+                tracing::warn!("could not resolve wallpaper image for {uri}");
+                return;
+            };
+            tracing::debug!("wallpaper re-extract ({reason}): {}", image.display());
+
+            let palette = match extract_palette(&image) {
+                Ok(p) if !p.is_empty() => p,
+                Ok(_) => {
+                    tracing::warn!("no dominant colours in {}", image.display());
+                    Vec::new()
+                }
+                Err(e) => {
+                    tracing::warn!("extraction failed for {}: {e}", image.display());
+                    return;
+                }
+            };
+
+            if !palette.is_empty() {
+                let encoded = encode_palette(&palette);
                 let refs: Vec<&str> = encoded.iter().map(String::as_str).collect();
-                let _ = app_clone.set_strv("cached-wallpaper-palette", refs);
+                let _ = app.set_strv("cached-wallpaper-palette", refs);
                 tracing::info!(
-                    "cached wallpaper palette: {} colors",
-                    palette.len()
+                    "cached wallpaper palette: {} colours from {}",
+                    palette.len(),
+                    image.display(),
                 );
             }
-            Ok(_) => tracing::warn!("no dominant colors extracted from wallpaper"),
-            Err(e) => tracing::warn!("wallpaper extraction failed: {e}"),
-        }
 
-        // --- Opt-in: also set the accent color. ---
-        let wants_reactive = app_clone
-            .settings_schema()
-            .map(|s| s.has_key("use-wallpaper-accent"))
-            .unwrap_or(false)
-            && app_clone.boolean("use-wallpaper-accent");
-        if wants_reactive {
-            match extract_dominant_accent(path) {
-                Ok(Some(accent_id)) => {
-                    let iface = gio::Settings::new(IFACE_SCHEMA);
-                    let _ = iface.set_string("accent-color", &accent_id);
-                    tracing::info!("auto-accent from wallpaper → {accent_id}");
-                }
-                Ok(None) => tracing::warn!("no dominant color extracted from wallpaper"),
-                Err(e) => tracing::warn!("accent extraction failed: {e}"),
+            let wants_reactive = app
+                .settings_schema()
+                .map(|s| s.has_key("use-wallpaper-accent"))
+                .unwrap_or(false)
+                && app.boolean("use-wallpaper-accent");
+            if wants_reactive {
+                apply_accent_from_palette(&app, &palette);
             }
+        })
+    };
+
+    // --- picture-uri change (user picked a new wallpaper or slideshow XML) ---
+    {
+        let bg = bg_settings.clone();
+        let app = app_settings.clone();
+        let slideshow_tick = slideshow_tick.clone();
+        let reapply = reapply.clone();
+        bg_settings
+            .clone()
+            .connect_changed(Some("picture-uri"), move |_, _| {
+                let uri = bg.string("picture-uri").to_string();
+                tracing::info!("wallpaper changed: {uri}");
+                reapply("picture-uri changed");
+                reinstall_slideshow_tick(&uri, &app, &slideshow_tick, reapply.clone());
+            });
+    }
+
+    // --- wallpaper-accent-index change: re-evaluate immediately so
+    //     the user's click takes effect without having to also touch
+    //     the wallpaper. ---
+    {
+        let reapply = reapply.clone();
+        app_settings
+            .clone()
+            .connect_changed(Some("wallpaper-accent-index"), move |_, _| {
+                reapply("wallpaper-accent-index changed");
+            });
+    }
+
+    // --- slideshow-interval change: rebuild the tick so cycles line
+    //     up with the fresh interval. ---
+    {
+        let bg = bg_settings.clone();
+        let app = app_settings.clone();
+        let slideshow_tick = slideshow_tick.clone();
+        let reapply = reapply.clone();
+        app_settings
+            .clone()
+            .connect_changed(Some("wallpaper-slideshow-interval"), move |_, _| {
+                let uri = bg.string("picture-uri").to_string();
+                reinstall_slideshow_tick(&uri, &app, &slideshow_tick, reapply.clone());
+            });
+    }
+
+    // --- On startup, prime the palette + tick using the current URI. ---
+    {
+        let uri = bg_settings.string("picture-uri").to_string();
+        reapply("startup");
+        reinstall_slideshow_tick(
+            &uri,
+            &app_settings,
+            &slideshow_tick,
+            reapply.clone(),
+        );
+    }
+}
+
+/// Resolve the current wallpaper image, whether `raw` is a plain image
+/// URI or a slideshow `.xml`.
+fn resolve_image(raw: &str) -> Option<std::path::PathBuf> {
+    match resolve_wallpaper_image(raw) {
+        Ok(Some(p)) => Some(p),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!("wallpaper resolve failed for {raw}: {e}");
+            None
         }
+    }
+}
+
+/// Write the accent color from `palette` to GNOME's `accent-color`,
+/// respecting the `wallpaper-accent-index` lock if it's set to a valid
+/// index. Silently no-ops on an empty palette.
+fn apply_accent_from_palette(app: &gio::Settings, palette: &[PaletteEntry]) {
+    let has_idx_key = app
+        .settings_schema()
+        .map(|s| s.has_key("wallpaper-accent-index"))
+        .unwrap_or(false);
+    let idx = if has_idx_key { app.int("wallpaper-accent-index") } else { -1 };
+
+    let Some(chosen) = locked_accent(palette, idx) else {
+        return;
+    };
+    let iface = gio::Settings::new(IFACE_SCHEMA);
+    if iface.string("accent-color").as_str() != chosen {
+        let _ = iface.set_string("accent-color", chosen);
+        let source = if idx >= 0 { format!("locked[{idx}]") } else { "dominant".into() };
+        tracing::info!("auto-accent from wallpaper ({source}) → {chosen}");
+    }
+}
+
+/// Remove any previously-installed slideshow tick, and — if the
+/// wallpaper URI points to a `.xml` — install a new one whose period
+/// is the user's `wallpaper-slideshow-interval` (floored to 5 s so a
+/// zero default can't wedge the daemon in a busy loop).
+fn reinstall_slideshow_tick(
+    uri: &str,
+    app: &gio::Settings,
+    slot: &Rc<RefCell<Option<glib::SourceId>>>,
+    reapply: Rc<dyn Fn(&str)>,
+) {
+    if let Some(old) = slot.borrow_mut().take() {
+        old.remove();
+    }
+
+    let is_slideshow = uri.strip_prefix("file://").unwrap_or(uri).ends_with(".xml");
+    if !is_slideshow {
+        return;
+    }
+
+    // Clamp to a safe minimum. GNOME's shortest stock slideshow is 1 s
+    // but we don't need to re-extract colours at that cadence; we re-
+    // sample at the configured hold time, which is the human-meaningful
+    // unit users actually see on screen.
+    let interval = app.uint("wallpaper-slideshow-interval").max(30);
+    tracing::info!("slideshow tick installed: every {interval}s");
+
+    let id = glib::timeout_add_seconds_local(interval, move || {
+        reapply("slideshow tick");
+        glib::ControlFlow::Continue
     });
+    *slot.borrow_mut() = Some(id);
 }
 
 /// Watch dark/light color scheme changes and re-apply external-app theming
@@ -346,123 +484,3 @@ fn nearest_accent_id(value: &str) -> String {
     best.to_owned()
 }
 
-/// Extract the dominant color from a wallpaper image and map it to the
-/// closest GNOME accent color id. Reuses the domain `color` module.
-fn extract_dominant_accent(path: &str) -> Result<Option<String>> {
-    let pixbuf = Pixbuf::from_file_at_scale(path, 64, 64, true)
-        .context("failed to load wallpaper image")?;
-    let Some(pixels) = pixbuf.pixel_bytes() else {
-        return Ok(None);
-    };
-    let channels = pixbuf.n_channels() as usize;
-    let data = pixels.as_ref();
-
-    let mut color_buckets: std::collections::HashMap<(u16, u8, u8), u32> =
-        std::collections::HashMap::new();
-
-    for chunk in data.chunks_exact(channels) {
-        if channels < 3 {
-            continue;
-        }
-        let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
-        let (h, s, v) = color::rgb_to_hsv(r, g, b);
-        if s < 15 || v < 25 || v > 240 {
-            continue;
-        }
-        let hue_bin = (h / 10) * 10;
-        let sat_bin = (s / 85).min(2);
-        let val_bin = (v / 85).min(2);
-        *color_buckets.entry((hue_bin, sat_bin, val_bin)).or_default() += 1;
-    }
-
-    let Some(((hue_bin, sat_bin, val_bin), _)) =
-        color_buckets.into_iter().max_by_key(|(_, c)| *c)
-    else {
-        return Ok(None);
-    };
-
-    let h = hue_bin + 5;
-    let s = (sat_bin as u16) * 85 + 42;
-    let v = (val_bin as u16) * 85 + 42;
-    let (r, g, b) = color::hsv_to_rgb(h, s.min(255) as u8, v.min(255) as u8);
-
-    // Closest GNOME accent
-    let mut best_id = "blue";
-    let mut best_dist = u32::MAX;
-    for &(id, hex) in ACCENT_COLORS {
-        let accent = HexColor::new(hex).map(|c| c.to_rgb()).unwrap_or((0, 0, 0));
-        let dist = color::color_distance((r, g, b), accent);
-        if dist < best_dist {
-            best_dist = dist;
-            best_id = id;
-        }
-    }
-    Ok(Some(best_id.to_owned()))
-}
-
-/// Extract up to N distinct accent-mapped colors from a wallpaper image.
-/// Returns `(hex, accent_id)` pairs ordered by dominance. Duplicates by
-/// accent id are filtered so the user's swatches span distinct hues.
-fn extract_wallpaper_palette(path: &str) -> Result<Vec<(String, String)>> {
-    const MAX_COLORS: usize = 5;
-
-    let pixbuf = Pixbuf::from_file_at_scale(path, 64, 64, true)
-        .context("failed to load wallpaper image")?;
-    let Some(pixels) = pixbuf.pixel_bytes() else {
-        return Ok(Vec::new());
-    };
-    let channels = pixbuf.n_channels() as usize;
-    let data = pixels.as_ref();
-
-    let mut color_buckets: std::collections::HashMap<(u16, u8, u8), u32> =
-        std::collections::HashMap::new();
-
-    for chunk in data.chunks_exact(channels) {
-        if channels < 3 {
-            continue;
-        }
-        let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
-        let (h, s, v) = color::rgb_to_hsv(r, g, b);
-        if s < 15 || v < 25 || v > 240 {
-            continue;
-        }
-        let hue_bin = (h / 10) * 10;
-        let sat_bin = (s / 85).min(2);
-        let val_bin = (v / 85).min(2);
-        *color_buckets.entry((hue_bin, sat_bin, val_bin)).or_default() += 1;
-    }
-
-    let mut buckets: Vec<_> = color_buckets.into_iter().collect();
-    buckets.sort_by(|a, b| b.1.cmp(&a.1));
-
-    let mut results = Vec::with_capacity(MAX_COLORS);
-    let mut used_accents = std::collections::HashSet::new();
-    for ((hue_bin, sat_bin, val_bin), _) in buckets.iter().take(20) {
-        let h = *hue_bin + 5;
-        let s = (*sat_bin as u16) * 85 + 42;
-        let v = (*val_bin as u16) * 85 + 42;
-        let (r, g, b) = color::hsv_to_rgb(h, s.min(255) as u8, v.min(255) as u8);
-
-        // Map to closest GNOME accent; skip if we've already taken a
-        // color mapped to this accent (keeps swatches visually distinct).
-        let mut best_id = "blue";
-        let mut best_dist = u32::MAX;
-        for &(id, hex) in ACCENT_COLORS {
-            let a = HexColor::new(hex).map(|c| c.to_rgb()).unwrap_or((0, 0, 0));
-            let d = color::color_distance((r, g, b), a);
-            if d < best_dist {
-                best_dist = d;
-                best_id = id;
-            }
-        }
-        if used_accents.contains(best_id) {
-            continue;
-        }
-        used_accents.insert(best_id.to_owned());
-        results.push((format!("#{r:02x}{g:02x}{b:02x}"), best_id.to_owned()));
-        if results.len() >= MAX_COLORS {
-            break;
-        }
-    }
-    Ok(results)
-}

@@ -245,6 +245,11 @@
       <summary>Cached wallpaper palette</summary>
       <description>Each entry is "HEX:ACCENT_ID". The experienced daemon rewrites this whenever the wallpaper changes, so the UI can show last-known swatches without re-running extraction. Independent of use-wallpaper-accent — that gates whether we also set the accent color automatically.</description>
     </key>
+    <key name="wallpaper-accent-index" type="i">
+      <default>-1</default>
+      <summary>Locked wallpaper palette index</summary>
+      <description>When use-wallpaper-accent is enabled, this governs which swatch of the cached palette drives the accent. -1 (the default) means "use the dominant colour"; 0..N-1 locks to that palette index, so when the daemon re-extracts on a wallpaper change it re-applies the accent at the same index of the new palette rather than the old hex. The UI sets this when the user clicks a wallpaper swatch and resets it to -1 when they click one of the nine stock accent buttons.</description>
+    </key>
     <key name="wallpaper-slideshow-name" type="s">
       <default>'gnome-x-slideshow'</default>
       <summary>Last-configured wallpaper slideshow name (GXF-072)</summary>

@@ -1102,10 +1102,12 @@ version = "0.2.0"
 name = "gnomex-infra"
 version = "0.2.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "chrono",
  "directories",
  "flate2",
+ "gdk-pixbuf",
  "gio",
  "gnomex-app",
  "gnomex-domain",
