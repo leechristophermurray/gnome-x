@@ -20,7 +20,7 @@
 use gnomex_app::ports::WallpaperSlideshowWriter;
 use gnomex_app::AppError;
 use gnomex_domain::{
-    slideshow_xml_relative_path, FixedClock, SlideshowClock, StartTime,
+    FixedClock, SlideshowClock, StartTime,
     WallpaperSlideshow,
 };
 use std::io::Write;
@@ -39,6 +39,10 @@ pub struct XdgWallpaperSlideshowWriter {
     /// swap in a [`FixedClock`] — already the default, so the same
     /// knob covers both worlds.
     clock: Box<dyn SlideshowClock>,
+    /// Filename-uniqueness suffix. See [`new_xml_path`] for why this
+    /// exists — it defeats GSettings' same-value write suppression
+    /// by guaranteeing every Apply lands on a distinct path.
+    stamp_provider: Box<dyn Fn() -> String + Send + Sync>,
 }
 
 impl XdgWallpaperSlideshowWriter {
@@ -58,6 +62,13 @@ impl XdgWallpaperSlideshowWriter {
         Self {
             dir: dir.into(),
             clock: Box::new(FixedClock(StartTime::EPOCH)),
+            stamp_provider: Box::new(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+                    .to_string()
+            }),
         }
     }
 
@@ -68,14 +79,56 @@ impl XdgWallpaperSlideshowWriter {
         self
     }
 
-    fn xml_path(&self, name: &str) -> PathBuf {
-        // Re-use the domain-level relative path helper so both
-        // adapter and any future callers converge on the same layout.
-        let rel = slideshow_xml_relative_path(name);
-        // `slideshow_xml_relative_path` prepends the subdir; strip it
-        // because our `dir` already points at that subdir.
-        let stem = rel.file_name().expect("helper yields a file name");
-        self.dir.join(stem)
+    /// Override the filename-uniqueness suffix. Production uses UNIX
+    /// epoch seconds so every Apply lands on a new path and GSettings
+    /// can't suppress the `picture-uri` write. Tests inject a fixed
+    /// string for deterministic fixture comparisons.
+    pub fn with_stamp_provider(
+        mut self,
+        provider: Box<dyn Fn() -> String + Send + Sync>,
+    ) -> Self {
+        self.stamp_provider = provider;
+        self
+    }
+
+    /// Candidate path for a *new* apply — filename carries a unique
+    /// suffix so the resulting `file://` URI differs from any prior
+    /// Apply's URI. That forces `GSettings.set_string("picture-uri")`
+    /// to emit `changed` (DConf suppresses identical writes), and
+    /// GNOME Shell therefore re-reads the XML. Without this, a user
+    /// re-applying after tweaking slots sees the old slideshow keep
+    /// playing because picture-uri hasn't changed.
+    fn new_xml_path(&self, name: &str) -> PathBuf {
+        let stamp = (self.stamp_provider)();
+        self.dir.join(format!("{name}-{stamp}.xml"))
+    }
+
+    /// Glob-free match of legacy / previous-apply XMLs we want to
+    /// garbage-collect. Matches `<name>.xml` (the historic stable
+    /// filename) AND `<name>-*.xml`. Returning a `Vec<PathBuf>` up-
+    /// front rather than iterating lets the caller log + decide.
+    fn stale_xmls(&self, name: &str, keep: Option<&Path>) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let Ok(read) = std::fs::read_dir(&self.dir) else {
+            return out;
+        };
+        let prefix = format!("{name}-");
+        let legacy = format!("{name}.xml");
+        for entry in read.flatten() {
+            let path = entry.path();
+            if keep.map(|k| k == path).unwrap_or(false) {
+                continue;
+            }
+            let Some(fname) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let matches_new = fname.starts_with(&prefix) && fname.ends_with(".xml");
+            let matches_legacy = fname == legacy;
+            if matches_new || matches_legacy {
+                out.push(path);
+            }
+        }
+        out
     }
 }
 
@@ -95,7 +148,7 @@ impl WallpaperSlideshowWriter for XdgWallpaperSlideshowWriter {
         })?;
 
         let xml = render_slideshow_xml(slideshow, &*self.clock);
-        let final_path = self.xml_path(slideshow.name());
+        let final_path = self.new_xml_path(slideshow.name());
 
         // Atomic write: tmp sibling + rename.
         let tmp_path = final_path.with_extension("xml.tmp");
@@ -122,22 +175,58 @@ impl WallpaperSlideshowWriter for XdgWallpaperSlideshowWriter {
             ))
         })?;
 
+        // Garbage-collect any older *-<stamp>.xml manifests this
+        // writer (or a previous version of it) left behind so the
+        // directory doesn't grow unbounded. Best-effort: we log but
+        // don't fail the Apply on a cleanup error.
+        for stale in self.stale_xmls(slideshow.name(), Some(&final_path)) {
+            match std::fs::remove_file(&stale) {
+                Ok(_) => tracing::debug!("cleaned up stale slideshow {}", stale.display()),
+                Err(e) => tracing::warn!(
+                    "failed to clean up {}: {e} (continuing)",
+                    stale.display()
+                ),
+            }
+        }
+
         tracing::info!(
-            "wrote slideshow '{}' ({} pictures) to {}",
+            "wrote slideshow '{}' ({} pictures, mode={:?}) to {}",
             slideshow.name(),
             slideshow.pictures().len(),
+            slideshow.mode(),
             final_path.display()
         );
         Ok(final_path)
     }
 
     fn delete(&self, name: &str) -> Result<(), AppError> {
-        let path = self.xml_path(name);
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(|e| {
+        // Delete every *-<stamp>.xml (and any legacy `<name>.xml`)
+        // belonging to this slideshow. Called from the UI's "clear"
+        // and pack-reset paths — if we missed some, the next Apply
+        // would garbage-collect them anyway, but we don't want to
+        // rely on that for deletion semantics.
+        let mut last_err: Option<AppError> = None;
+        for path in self.stale_xmls(name, None) {
+            if let Err(e) = std::fs::remove_file(&path) {
+                last_err = Some(AppError::Storage(format!(
+                    "delete {}: {e}",
+                    path.display(),
+                )));
+            }
+        }
+        if let Some(e) = last_err {
+            return Err(e);
+        }
+        // Legacy single-path behaviour kept as a fallback so old
+        // callers that still know only about `<name>.xml` (if any
+        // exist outside `stale_xmls`) get a clear error if anything
+        // is left.
+        let legacy = self.dir.join(format!("{name}.xml"));
+        if legacy.exists() {
+            std::fs::remove_file(&legacy).map_err(|e| {
                 AppError::Storage(format!(
                     "delete {}: {e}",
-                    path.display()
+                    legacy.display()
                 ))
             })?;
         }

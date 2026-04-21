@@ -18,11 +18,12 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn writer(dir: &TempDir) -> XdgWallpaperSlideshowWriter {
-    // Epoch clock is the default, but pin it explicitly so the tests
-    // remain independent of any future change to the adapter
-    // default.
+    // Epoch clock + deterministic stamp so tests can assert exact
+    // filenames. Production injects UNIX seconds to defeat
+    // GSettings' same-value write suppression.
     XdgWallpaperSlideshowWriter::with_dir(dir.path())
         .with_clock(Box::new(FixedClock(StartTime::EPOCH)))
+        .with_stamp_provider(Box::new(|| "t".into()))
 }
 
 fn sample(name: &str, pics: &[&str]) -> WallpaperSlideshow {
@@ -42,7 +43,7 @@ fn write_creates_xml_at_expected_path_with_gnome_format() {
     let s = sample("sunset", &["/srv/p/a.jpg", "/srv/p/b.jpg", "/srv/p/c.jpg"]);
 
     let path = w.write(&s).expect("write");
-    assert_eq!(path, dir.path().join("sunset.xml"));
+    assert_eq!(path, dir.path().join("sunset-t.xml"));
     assert!(path.exists());
 
     let body = std::fs::read_to_string(&path).expect("read back");
@@ -125,7 +126,7 @@ fn write_is_atomic_no_tmp_file_left_behind() {
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(entries, vec!["atom.xml"]);
+    assert_eq!(entries, vec!["atom-t.xml"]);
 }
 
 #[test]
@@ -187,4 +188,79 @@ fn delete_removes_previously_written_xml() {
 
     w.delete("todelete").expect("delete");
     assert!(!path.exists());
+}
+
+#[test]
+fn write_uses_unique_filenames_across_applies() {
+    // Prove the GSettings "same value suppression" workaround:
+    // consecutive Applies land on distinct paths so `picture-uri`
+    // is genuinely a new URI each time.
+    use std::cell::Cell;
+    let dir = TempDir::new().expect("tempdir");
+    let counter = std::sync::Arc::new(std::sync::Mutex::new(0u64));
+    let counter_clone = counter.clone();
+    let w = XdgWallpaperSlideshowWriter::with_dir(dir.path())
+        .with_clock(Box::new(FixedClock(StartTime::EPOCH)))
+        .with_stamp_provider(Box::new(move || {
+            let mut c = counter_clone.lock().unwrap();
+            *c += 1;
+            c.to_string()
+        }));
+    let s = sample("cycle", &["/a.jpg", "/b.jpg"]);
+
+    let first = w.write(&s).expect("first write");
+    let second = w.write(&s).expect("second write");
+    let third = w.write(&s).expect("third write");
+    assert_ne!(first, second);
+    assert_ne!(second, third);
+    assert_ne!(first, third);
+    let _ = Cell::new(()); // silence unused import lint
+    // Older applies are garbage-collected so the dir doesn't grow.
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(entries, vec!["cycle-3.xml"]);
+}
+
+#[test]
+fn write_cleans_up_legacy_bare_name_xml() {
+    // Earlier versions of the writer produced `<name>.xml`. Such a
+    // file lingering in the directory would permanently show up in
+    // `~/.local/share/gnome-background-properties/` even after
+    // applies have rotated to stamped filenames. Garbage-collect it
+    // on the next Apply.
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(dir.path().join("legacy.xml"), b"stub").unwrap();
+
+    let w = writer(&dir);
+    let s = sample("legacy", &["/a.jpg", "/b.jpg"]);
+    let _ = w.write(&s).expect("write");
+
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(entries, vec!["legacy-t.xml"]);
+}
+
+#[test]
+fn delete_removes_stamped_and_legacy_xmls_for_name() {
+    let dir = TempDir::new().expect("tempdir");
+    // Seed the directory with one legacy and two stamped versions
+    // of the same slideshow; `delete` must remove all three.
+    for f in ["old.xml", "old-1.xml", "old-2.xml"] {
+        std::fs::write(dir.path().join(f), b"stub").unwrap();
+    }
+    // Plus an unrelated slideshow that must be left alone.
+    std::fs::write(dir.path().join("other-5.xml"), b"stub").unwrap();
+
+    let w = writer(&dir);
+    w.delete("old").expect("delete");
+
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(entries, vec!["other-5.xml"]);
 }
