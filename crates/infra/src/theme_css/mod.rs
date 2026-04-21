@@ -6,12 +6,18 @@
 //! Each supported GNOME version has its own adapter implementing
 //! `ThemeCssGenerator`. The factory selects the right one at runtime
 //! based on the detected shell version.
+//!
+//! The GTK3 output does **not** depend on the GNOME version — GTK 3.24
+//! is the last stable release line — so a single [`gtk3::Gtk3CssGenerator`]
+//! covers every case and each per-version adapter fills `ThemeCss::gtk3_css`
+//! from the shared [`gtk3::generate_gtk3_css`] helper (GXF-001).
 
 mod common;
 mod gnome45;
 mod gnome46;
 mod gnome47;
 mod gnome50;
+pub mod gtk3;
 
 use gnomex_app::ports::ThemeCssGenerator;
 use gnomex_domain::ShellVersion;

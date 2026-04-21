@@ -116,6 +116,7 @@ impl ThemeCssGenerator for MockCssGenerator {
         *self.last_spec.lock().unwrap() = Some(spec.clone());
         Ok(ThemeCss {
             gtk_css: "/* mock gtk */".to_owned(),
+            gtk3_css: "/* mock gtk3 */".to_owned(),
             shell_css: "/* mock shell */".to_owned(),
         })
     }
@@ -132,6 +133,7 @@ impl ThemeCssGenerator for MockCssGenerator {
 pub struct MockThemeWriter {
     pub calls: Mutex<Vec<String>>,
     pub last_gtk_css: Mutex<Option<String>>,
+    pub last_gtk3_css: Mutex<Option<String>>,
     pub last_shell_css: Mutex<Option<(String, String)>>,
 }
 
@@ -142,9 +144,10 @@ impl MockThemeWriter {
 }
 
 impl ThemeWriter for MockThemeWriter {
-    fn write_gtk_css(&self, css: &str) -> Result<(), AppError> {
+    fn write_gtk_css(&self, gtk4_css: &str, gtk3_css: &str) -> Result<(), AppError> {
         self.calls.lock().unwrap().push("write_gtk_css".into());
-        *self.last_gtk_css.lock().unwrap() = Some(css.to_owned());
+        *self.last_gtk_css.lock().unwrap() = Some(gtk4_css.to_owned());
+        *self.last_gtk3_css.lock().unwrap() = Some(gtk3_css.to_owned());
         Ok(())
     }
     fn write_shell_css(&self, css: &str, theme_name: &str) -> Result<(), AppError> {

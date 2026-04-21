@@ -12,14 +12,18 @@ const CUSTOM_SHELL_THEME_NAME: &str = "GNOME-X-Custom";
 
 /// Concrete adapter: write theme CSS to the local filesystem.
 ///
-/// Writes both the GTK4 override (`gtk-4.0/gtk.css`, primary target)
-/// and the GTK3 override (`gtk-3.0/gtk.css`, for legacy and sandboxed
-/// Chromium/Electron apps that still render under GTK3) on every
-/// `write_gtk_css`. Both files are backed up once before the first
-/// overwrite so `clear_overrides` can restore the user's pre-GNOME-X
-/// state.
+/// Writes the GTK4 override (`gtk-4.0/gtk.css`, primary target) and a
+/// *separately-generated* GTK3 override (`gtk-3.0/gtk.css`, for legacy
+/// and sandboxed Chromium/Electron apps that still render under GTK3)
+/// on every `write_gtk_css`. The two payloads target different token
+/// namespaces (`@window_bg_color` vs `@theme_bg_color`) and different
+/// widget selectors (`.navigation-sidebar` vs `.sidebar`, etc.), so
+/// they are produced independently by the CSS generator (GXF-001).
+/// Both files are backed up once before the first overwrite so
+/// `clear_overrides` can restore the user's pre-GNOME-X state.
 ///
-/// Related tracker items: GXF-010 (multi-path resolution).
+/// Related tracker items: GXF-001 (GTK3 vs GTK4 divergence),
+/// GXF-010 (multi-path resolution).
 pub struct FilesystemThemeWriter {
     paths: ResourcePaths,
     shell_theme_dir: PathBuf,
@@ -41,14 +45,14 @@ impl FilesystemThemeWriter {
 }
 
 impl ThemeWriter for FilesystemThemeWriter {
-    fn write_gtk_css(&self, css: &str) -> Result<(), AppError> {
-        // Both GTK4 (primary) and GTK3 (for legacy / sandboxed apps
-        // that still render on the older toolkit) get the same CSS.
-        // Each path is independently backed up once.
+    fn write_gtk_css(&self, gtk4_css: &str, gtk3_css: &str) -> Result<(), AppError> {
+        // GTK4 gets the Libadwaita-flavoured payload; GTK3 gets a
+        // parallel payload built against the legacy `@theme_*` token
+        // namespace and GTK3 widget tree. Each path is independently
+        // backed up once.
         let targets = self.gtk_override_files();
-        for path in [&targets.gtk4, &targets.gtk3] {
-            write_gtk_override(path, css)?;
-        }
+        write_gtk_override(&targets.gtk4, gtk4_css)?;
+        write_gtk_override(&targets.gtk3, gtk3_css)?;
         Ok(())
     }
 
@@ -139,14 +143,37 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let writer = tmp_writer(dir.path());
 
-        writer.write_gtk_css("/* test */").unwrap();
+        writer.write_gtk_css("/* gtk4 */", "/* gtk3 */").unwrap();
 
         let gtk4 = dir.path().join(".config/gtk-4.0/gtk.css");
         let gtk3 = dir.path().join(".config/gtk-3.0/gtk.css");
         assert!(gtk4.exists(), "missing {}", gtk4.display());
         assert!(gtk3.exists(), "missing {}", gtk3.display());
-        assert_eq!(std::fs::read_to_string(&gtk4).unwrap(), "/* test */");
-        assert_eq!(std::fs::read_to_string(&gtk3).unwrap(), "/* test */");
+        assert_eq!(std::fs::read_to_string(&gtk4).unwrap(), "/* gtk4 */");
+        assert_eq!(std::fs::read_to_string(&gtk3).unwrap(), "/* gtk3 */");
+    }
+
+    #[test]
+    fn write_gtk_css_routes_payloads_to_correct_targets() {
+        // Pins the core invariant of this feature: GTK4 CSS must land
+        // at `gtk-4.0/gtk.css`, GTK3 CSS must land at `gtk-3.0/gtk.css`,
+        // and the two must never bleed into each other.
+        let dir = TempDir::new().unwrap();
+        let writer = tmp_writer(dir.path());
+
+        writer
+            .write_gtk_css(
+                "/* GNOME X — GTK4 overrides */\n@define-color window_bg_color #abc;",
+                "/* GNOME X — GTK3 overrides */\n@define-color theme_bg_color #def;",
+            )
+            .unwrap();
+
+        let gtk4 = std::fs::read_to_string(dir.path().join(".config/gtk-4.0/gtk.css")).unwrap();
+        let gtk3 = std::fs::read_to_string(dir.path().join(".config/gtk-3.0/gtk.css")).unwrap();
+        assert!(gtk4.contains("window_bg_color"), "GTK4 file missing GTK4 token");
+        assert!(!gtk4.contains("theme_bg_color"), "GTK4 file contaminated with GTK3 token");
+        assert!(gtk3.contains("theme_bg_color"), "GTK3 file missing GTK3 token");
+        assert!(!gtk3.contains("window_bg_color"), "GTK3 file contaminated with GTK4 token");
     }
 
     #[test]
@@ -158,7 +185,7 @@ mod tests {
         std::fs::create_dir_all(gtk4.parent().unwrap()).unwrap();
         std::fs::write(&gtk4, "/* user-authored */").unwrap();
 
-        writer.write_gtk_css("/* gnome-x */").unwrap();
+        writer.write_gtk_css("/* gnome-x */", "/* gnome-x-3 */").unwrap();
 
         let backup = dir
             .path()
@@ -180,7 +207,7 @@ mod tests {
         std::fs::create_dir_all(gtk4.parent().unwrap()).unwrap();
         std::fs::write(&gtk4, "/* GNOME X — Shell overrides */").unwrap();
 
-        writer.write_gtk_css("/* new */").unwrap();
+        writer.write_gtk_css("/* new */", "/* new-3 */").unwrap();
         let backup = dir
             .path()
             .join(".config/gtk-4.0/gtk.css.gnomex-backup");
@@ -196,7 +223,7 @@ mod tests {
         std::fs::create_dir_all(gtk4.parent().unwrap()).unwrap();
         std::fs::write(&gtk4, "/* user-authored */").unwrap();
 
-        writer.write_gtk_css("/* gnome-x */").unwrap();
+        writer.write_gtk_css("/* gnome-x */", "/* gnome-x-3 */").unwrap();
         writer.clear_overrides().unwrap();
 
         // Backup should be gone, gtk.css should hold the original.
@@ -217,7 +244,7 @@ mod tests {
         let writer = tmp_writer(dir.path());
 
         // No prior user file; writer writes its own, then clears.
-        writer.write_gtk_css("/* gnome-x */").unwrap();
+        writer.write_gtk_css("/* gnome-x */", "/* gnome-x-3 */").unwrap();
         writer.clear_overrides().unwrap();
 
         assert!(!dir.path().join(".config/gtk-4.0/gtk.css").exists());

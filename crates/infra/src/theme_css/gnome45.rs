@@ -8,6 +8,7 @@ use super::common::{
     gtk_color_overrides_css, gtk_csd_css, gtk_layer_separation_css, gtk_radius_css, gtk_tint_css,
     gtk_widget_color_overrides_css, gtk_widget_style_css, tint_shell_surfaces,
 };
+use super::gtk3::generate_gtk3_css;
 use gnomex_app::ports::{ThemeCss, ThemeCssGenerator};
 use gnomex_app::AppError;
 use gnomex_domain::ThemeSpec;
@@ -22,6 +23,7 @@ impl ThemeCssGenerator for Gnome45CssGenerator {
     fn generate(&self, spec: &ThemeSpec) -> Result<ThemeCss, AppError> {
         Ok(ThemeCss {
             gtk_css: self.gtk(spec),
+            gtk3_css: generate_gtk3_css(spec),
             shell_css: self.shell(spec),
         })
     }

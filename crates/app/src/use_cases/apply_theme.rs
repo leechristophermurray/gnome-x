@@ -46,7 +46,7 @@ impl ApplyThemeUseCase {
     /// every registered external-app themer with a projection of `spec`.
     pub fn apply(&self, spec: &ThemeSpec) -> Result<(), AppError> {
         let css = self.gen_mock.generate(spec)?;
-        self.writer.write_gtk_css(&css.gtk_css)?;
+        self.writer.write_gtk_css(&css.gtk_css, &css.gtk3_css)?;
         self.writer.write_shell_css(&css.shell_css, CUSTOM_THEME_NAME)?;
         self.appearance.set_shell_theme(CUSTOM_THEME_NAME).ok();
 
