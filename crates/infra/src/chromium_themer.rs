@@ -17,15 +17,40 @@
 //! We also detect which Chromium-family browsers are installed (Chrome,
 //! Chromium, Brave, Edge, Vivaldi) just so the log message can point at
 //! the right `chrome://extensions` URL set.
+//!
+//! ## GTK 3 overrides sidecar (GXF-020)
+//!
+//! When launched with `--ozone-platform=wayland` (or under GTK's X11
+//! backend), Chromium-family browsers still link against **GTK 3** for
+//! their native, non-web-content chrome: native scrollbars (when
+//! `--use-gtk-scrollbars` or the default), right-click context menus,
+//! and the native file-picker dialog. These surfaces read
+//! `~/.config/gtk-3.0/gtk.css` like any other GTK3 app, but only a
+//! narrow handful of selectors take effect on them. We emit a
+//! purpose-built snippet (`chromium.gtk3.css`) alongside the manifest
+//! containing just those selectors, tinted from the `ExternalThemeSpec`.
+//! The snippet sits in our theme dir so users can `@import` it into
+//! their own GTK3 override without fighting the main theme writer's
+//! ownership of `gtk-3.0/gtk.css` (GXF-001). Scope is deliberately tiny
+//! — scrollbar track/thumb, context menu bg/fg, file-chooser window bg
+//! — so we don't re-implement the whole GTK3 pipeline
+//! (that's `theme_css::gtk3`).
 
 use gnomex_app::ports::ExternalAppThemer;
 use gnomex_app::AppError;
-use gnomex_domain::ExternalThemeSpec;
+use gnomex_domain::{ColorScheme, ExternalThemeSpec};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
 const THEME_SUBDIR: &str = ".local/share/gnome-x/chromium-theme";
 const MANIFEST_NAME: &str = "manifest.json";
+const GTK3_OVERRIDES_NAME: &str = "chromium.gtk3.css";
+
+/// Header embedded in the Chromium GTK3 sidecar. Contains the literal
+/// `"GNOME X"` substring the conflict detector (PR #40) greps for so
+/// the file is recognised as managed rather than a user override.
+const CHROMIUM_GTK3_HEADER: &str =
+    "/* GNOME X — Chromium/Electron GTK3 overrides (GXF-020) */";
 
 struct ChromiumFlavor {
     name: &'static str,
@@ -93,6 +118,16 @@ impl ExternalAppThemer for ChromiumThemer {
         std::fs::write(&manifest_path, pretty)
             .map_err(|e| AppError::Settings(format!("write {}: {e}", manifest_path.display())))?;
 
+        // Also emit a tiny GTK3 sidecar for the native chrome bits
+        // Chromium still renders via GTK3 (scrollbars, context menus,
+        // file-picker). Users opt in by `@import`ing it from their own
+        // `~/.config/gtk-3.0/gtk.css` — we don't touch that file here
+        // because `FilesystemThemeWriter` owns it.
+        let gtk3_path = dir.join(GTK3_OVERRIDES_NAME);
+        let gtk3_css = build_chromium_gtk3_css(spec);
+        std::fs::write(&gtk3_path, &gtk3_css)
+            .map_err(|e| AppError::Settings(format!("write {}: {e}", gtk3_path.display())))?;
+
         tracing::info!(
             "chromium: wrote theme to {} (detected: {})",
             dir.display(),
@@ -101,6 +136,11 @@ impl ExternalAppThemer for ChromiumThemer {
         tracing::info!(
             "chromium: load once via chrome://extensions → Developer mode → Load unpacked → {}",
             dir.display()
+        );
+        tracing::info!(
+            "chromium: GTK3 sidecar at {} — `@import url(\"file://{}\");` from ~/.config/gtk-3.0/gtk.css to style native scrollbars/context menus/file-pickers",
+            gtk3_path.display(),
+            gtk3_path.display(),
         );
         Ok(())
     }
@@ -186,10 +226,129 @@ fn build_manifest(spec: &ExternalThemeSpec) -> Value {
     })
 }
 
+/// Build a focused GTK3 CSS snippet covering the three surfaces
+/// Chromium's native (non-web-content) chrome honours: scrollbars,
+/// right-click context menus, and the native file-picker dialog.
+///
+/// We intentionally do **not** target `headerbar`, `entry`, `button`,
+/// or tab selectors — Chromium renders those itself from the manifest
+/// theme. Touching them here either no-ops or leaks styling into other
+/// GTK3 apps. The rules use only selectors that GTK 3.24 accepts and
+/// that Chromium's embedded GTK widgets actually instantiate.
+///
+/// Colour derivation:
+/// * **Surface** (context-menu / file-picker bg) = libadwaita-neutral
+///   window bg for the active scheme, matching the manifest's `frame`.
+/// * **Headerbar** (scrollbar trough) = slightly darker/lighter than
+///   surface, matching the manifest's `toolbar`.
+/// * **Accent** (scrollbar thumb, focus ring) = the user's accent hex.
+///
+/// See `theme_css::gtk3::generate_gtk3_css` for the full GTK3 pipeline
+/// — the selectors here overlap in concept but are deliberately
+/// narrower and opt-in (via `@import`) so they don't pollute the
+/// system-wide GTK3 override.
+pub fn build_chromium_gtk3_css(spec: &ExternalThemeSpec) -> String {
+    let accent = spec.accent.as_str();
+    let (accent_r, accent_g, accent_b) = spec.accent.to_rgb();
+    let (surface, surface_fg, headerbar) = palette(spec.color_scheme);
+
+    format!(
+        r#"{header}
+/* Scope: native GTK3 widgets Chromium-family browsers (Chrome, Brave,
+   Edge, Electron under --ozone-platform=wayland) still instantiate
+   outside their web-content render pipeline. Pulled from
+   ExternalThemeSpec: accent={accent}, scheme={scheme}. */
+
+/* ---- Scrollbars (trough + slider/thumb) ---- */
+/* GTK3 Chromium honours `scrollbar` and `scrollbar slider`. The
+   `contents trough` tree is the GTK 3.24 widget path. */
+scrollbar, scrollbar.vertical, scrollbar.horizontal {{
+    background-color: {headerbar};
+}}
+scrollbar trough {{
+    background-color: {headerbar};
+    border-radius: 0;
+}}
+scrollbar slider {{
+    background-color: rgba({accent_r}, {accent_g}, {accent_b}, 0.55);
+    border: 2px solid transparent;
+    border-radius: 8px;
+    min-width: 6px;
+    min-height: 6px;
+}}
+scrollbar slider:hover {{
+    background-color: rgba({accent_r}, {accent_g}, {accent_b}, 0.80);
+}}
+scrollbar slider:active {{
+    background-color: {accent};
+}}
+
+/* ---- Right-click context menus ---- */
+/* Chromium opens context menus via GtkMenu; `menu` and `menuitem` are
+   the GTK 3.24 selectors for the classic Xlib-backed menu widget. */
+menu, .menu, menu > arrow, .context-menu {{
+    background-color: {surface};
+    color: {surface_fg};
+    border: 1px solid alpha({surface_fg}, 0.15);
+}}
+menuitem, .menuitem {{
+    background-color: transparent;
+    color: {surface_fg};
+    padding: 4px 8px;
+}}
+menuitem:hover, menuitem:focus, .menuitem:hover {{
+    background-color: {accent};
+    color: #ffffff;
+}}
+menu separator, .menu separator {{
+    background-color: alpha({surface_fg}, 0.12);
+    min-height: 1px;
+}}
+
+/* ---- Native file picker (GtkFileChooserDialog) ---- */
+/* Chromium's "Save As" / "Open File" opens a GTK3 native dialog. The
+   outer window + its .dialog-vbox control the overall background. */
+filechooser, .filechooser, window.dialog.background {{
+    background-color: {surface};
+    color: {surface_fg};
+}}
+filechooser .sidebar, filechooser placessidebar {{
+    background-color: {headerbar};
+    color: {surface_fg};
+}}
+filechooser .sidebar row:selected,
+filechooser placessidebar row:selected {{
+    background-color: {accent};
+    color: #ffffff;
+}}
+
+/* ---- Focus ring (URL-bar-adjacent dialogs) ---- */
+*:focus {{
+    outline-color: {accent};
+}}
+"#,
+        header = CHROMIUM_GTK3_HEADER,
+        scheme = if spec.color_scheme.is_dark() { "dark" } else { "light" },
+    )
+}
+
+/// Return `(surface_bg, surface_fg, headerbar_bg)` for the given scheme.
+/// Mirrors the manifest palette so the GTK3 sidecar blends with the
+/// Chromium-extension theme rather than diverging.
+fn palette(scheme: ColorScheme) -> (&'static str, &'static str, &'static str) {
+    if scheme.is_dark() {
+        // #242424 window bg, #ededed fg, #2e2e2e headerbar — matches
+        // libadwaita dark and the manifest's `frame`/`toolbar`.
+        ("#242424", "#ededed", "#2e2e2e")
+    } else {
+        ("#fafafa", "#2e2e2e", "#ebebeb")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gnomex_domain::{ColorScheme, HexColor};
+    use gnomex_domain::HexColor;
 
     fn spec() -> ExternalThemeSpec {
         ExternalThemeSpec {
@@ -228,5 +387,58 @@ mod tests {
             dark["theme"]["colors"]["bookmark_text"],
             light["theme"]["colors"]["bookmark_text"]
         );
+    }
+
+    #[test]
+    fn gtk3_css_contains_gnome_x_marker() {
+        let css = build_chromium_gtk3_css(&spec());
+        assert!(
+            css.contains("GNOME X"),
+            "Chromium GTK3 sidecar missing managed-region marker; \
+             conflict detector (PR #40) will false-positive on every write.\n{css}",
+        );
+    }
+
+    #[test]
+    fn gtk3_css_targets_chromium_native_chrome_selectors() {
+        let css = build_chromium_gtk3_css(&spec());
+        // Scope pins: the three surfaces Chromium's non-web-content
+        // chrome actually exposes to GTK3 styling.
+        for selector in ["scrollbar", "scrollbar slider", "menu", "menuitem", "filechooser"] {
+            assert!(
+                css.contains(selector),
+                "Chromium GTK3 sidecar missing `{selector}` — \
+                 user-visible native chrome will render un-themed.\n{css}",
+            );
+        }
+    }
+
+    #[test]
+    fn gtk3_css_embeds_accent_hex_from_spec() {
+        let css = build_chromium_gtk3_css(&spec());
+        // Accent shows up both as the literal hex (slider:active,
+        // focus outline) and as an RGB triple (translucent hovers).
+        assert!(
+            css.contains("#3584e4"),
+            "Chromium GTK3 sidecar didn't embed the spec's accent hex"
+        );
+        assert!(
+            css.contains("53, 132, 228"),
+            "Chromium GTK3 sidecar didn't embed the spec's accent RGB triple"
+        );
+    }
+
+    #[test]
+    fn gtk3_css_palette_flips_with_scheme() {
+        let mut s = spec();
+        let dark = build_chromium_gtk3_css(&s);
+        s.color_scheme = ColorScheme::Light;
+        let light = build_chromium_gtk3_css(&s);
+        // Dark surface is the libadwaita window bg (#242424); light is
+        // the Adwaita near-white (#fafafa). If the palette doesn't flip
+        // users get a dark-on-light or light-on-dark context menu.
+        assert!(dark.contains("#242424"), "dark palette missing surface hex");
+        assert!(light.contains("#fafafa"), "light palette missing surface hex");
+        assert_ne!(dark, light, "scheme flip must actually change the output");
     }
 }
