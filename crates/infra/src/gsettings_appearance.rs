@@ -88,6 +88,18 @@ impl AppearanceSettings for GSettingsAppearance {
     }
 
     fn set_wallpaper(&self, uri: &str) -> Result<(), AppError> {
+        // GSettings `set_string` suppresses the write when the new
+        // value equals the old — the `changed` signal never fires.
+        // For slideshow Apply this bites: we overwrite the XML file
+        // in place but `picture-uri` still holds the identical URI,
+        // so GNOME Shell never re-reads it and keeps playing the
+        // stale cycle. Clear first, then set, so the signal fires
+        // twice and Mutter picks up the new XML content.
+        let current = Self::get_string(BG_SCHEMA, "picture-uri").unwrap_or_default();
+        if current == uri {
+            Self::set_string(BG_SCHEMA, "picture-uri", "")?;
+            Self::set_string(BG_SCHEMA, "picture-uri-dark", "")?;
+        }
         Self::set_string(BG_SCHEMA, "picture-uri", uri)?;
         Self::set_string(BG_SCHEMA, "picture-uri-dark", uri)?;
         Ok(())

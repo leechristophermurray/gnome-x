@@ -431,6 +431,15 @@ impl SimpleComponent for WallpaperSlideshowModel {
                 self.settings.set_string(KEY_MODE, &self.mode).ok();
                 self.apply_mode_visibility();
                 self.refresh_apply_sensitivity();
+                // The user's mental model is "toggle = switch
+                // slideshow", not "toggle = re-arrange editor". If the
+                // target mode already has valid data, apply it now so
+                // the desktop actually follows the switch. When the
+                // target mode is incomplete we leave the old slideshow
+                // running — the Apply button stays disabled as a hint.
+                if self.is_target_mode_valid() {
+                    self.apply_slideshow(&sender);
+                }
             }
             WallpaperSlideshowMsg::ChooseTodPicture(slot) => {
                 self.spawn_tod_picker(slot, &sender);
@@ -679,13 +688,19 @@ impl WallpaperSlideshowModel {
     }
 
     fn refresh_apply_sensitivity(&self) {
-        let sensitive = if self.mode == "tod" {
+        self.apply_button.set_sensitive(self.is_target_mode_valid());
+    }
+
+    /// Does the currently-selected mode have enough data to Apply?
+    /// Drives both the Apply button's sensitivity and the auto-apply
+    /// on mode-toggle.
+    fn is_target_mode_valid(&self) -> bool {
+        if self.mode == "tod" {
             self.tod_pictures.iter().all(|p| p.is_some())
                 && times_strictly_increasing(&self.tod_minutes)
         } else {
             self.pictures.len() >= 2
-        };
-        self.apply_button.set_sensitive(sensitive);
+        }
     }
 
     fn build_tod_rows(&mut self, sender: &ComponentSender<Self>) {
