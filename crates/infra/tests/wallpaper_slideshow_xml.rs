@@ -1,0 +1,190 @@
+// Copyright 2026 GNOME X Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+//! Hermetic integration tests for `XdgWallpaperSlideshowWriter`.
+//!
+//! Runs the real adapter against a tempdir — never touches
+//! `$HOME`. Verifies:
+//!   - XML is written atomically under the target directory
+//!   - `<starttime>` reflects the injected clock
+//!   - `<static>` / `<transition>` counts and ordering match the spec
+//!   - picture paths are absolute and XML-escaped
+//!   - delete() cleans up without error when the file is absent
+
+use gnomex_app::ports::WallpaperSlideshowWriter;
+use gnomex_domain::{FixedClock, StartTime, WallpaperSlideshow};
+use gnomex_infra::wallpaper_slideshow_xml::XdgWallpaperSlideshowWriter;
+use std::path::PathBuf;
+use tempfile::TempDir;
+
+fn writer(dir: &TempDir) -> XdgWallpaperSlideshowWriter {
+    // Epoch clock is the default, but pin it explicitly so the tests
+    // remain independent of any future change to the adapter
+    // default.
+    XdgWallpaperSlideshowWriter::with_dir(dir.path())
+        .with_clock(Box::new(FixedClock(StartTime::EPOCH)))
+}
+
+fn sample(name: &str, pics: &[&str]) -> WallpaperSlideshow {
+    WallpaperSlideshow::new(
+        name,
+        pics.iter().map(PathBuf::from).collect(),
+        600,
+        false,
+    )
+    .unwrap()
+}
+
+#[test]
+fn write_creates_xml_at_expected_path_with_gnome_format() {
+    let dir = TempDir::new().expect("tempdir");
+    let w = writer(&dir);
+    let s = sample("sunset", &["/srv/p/a.jpg", "/srv/p/b.jpg", "/srv/p/c.jpg"]);
+
+    let path = w.write(&s).expect("write");
+    assert_eq!(path, dir.path().join("sunset.xml"));
+    assert!(path.exists());
+
+    let body = std::fs::read_to_string(&path).expect("read back");
+    // XML prolog present — gnome-background-properties needs it.
+    assert!(body.starts_with("<?xml"));
+    // Root element + required starttime.
+    assert!(body.contains("<background>"));
+    assert!(body.contains("<starttime>"));
+    assert!(body.trim_end().ends_with("</background>"));
+    // One static + one transition per picture, wrapping.
+    assert_eq!(body.matches("<static>").count(), 3);
+    assert_eq!(body.matches("<transition").count(), 3);
+}
+
+#[test]
+fn write_places_absolute_picture_paths_in_file_elements() {
+    let dir = TempDir::new().expect("tempdir");
+    let w = writer(&dir);
+    let s = sample("abs", &["/etc/foo.jpg", "/var/bar.jpg"]);
+
+    let path = w.write(&s).expect("write");
+    let body = std::fs::read_to_string(&path).unwrap();
+    assert!(body.contains("<file>/etc/foo.jpg</file>"));
+    assert!(body.contains("<file>/var/bar.jpg</file>"));
+    assert!(body.contains("<from>/etc/foo.jpg</from>"));
+    assert!(body.contains("<to>/var/bar.jpg</to>"));
+}
+
+#[test]
+fn write_renders_starttime_from_injected_clock() {
+    let dir = TempDir::new().expect("tempdir");
+    let custom = StartTime {
+        year: 2042,
+        month: 3,
+        day: 14,
+        hour: 9,
+        minute: 26,
+        second: 53,
+    };
+    let w = XdgWallpaperSlideshowWriter::with_dir(dir.path())
+        .with_clock(Box::new(FixedClock(custom)));
+    let s = sample("future", &["/a.jpg", "/b.jpg"]);
+
+    let path = w.write(&s).expect("write");
+    let body = std::fs::read_to_string(&path).unwrap();
+    assert!(body.contains("<year>2042</year>"));
+    assert!(body.contains("<month>3</month>"));
+    assert!(body.contains("<day>14</day>"));
+    assert!(body.contains("<hour>9</hour>"));
+    assert!(body.contains("<minute>26</minute>"));
+    assert!(body.contains("<second>53</second>"));
+}
+
+#[test]
+fn write_uses_slideshow_interval_as_static_duration() {
+    let dir = TempDir::new().expect("tempdir");
+    let w = writer(&dir);
+    let s = WallpaperSlideshow::new(
+        "timed",
+        vec![PathBuf::from("/a.jpg"), PathBuf::from("/b.jpg")],
+        1800,
+        false,
+    )
+    .unwrap();
+
+    let body = std::fs::read_to_string(w.write(&s).unwrap()).unwrap();
+    // interval_seconds → <static><duration> (float-formatted)
+    assert!(body.contains("<duration>1800.0</duration>"));
+}
+
+#[test]
+fn write_is_atomic_no_tmp_file_left_behind() {
+    let dir = TempDir::new().expect("tempdir");
+    let w = writer(&dir);
+    w.write(&sample("atom", &["/a.jpg", "/b.jpg"]))
+        .expect("write");
+
+    // After a successful write, only the final .xml should exist.
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(entries, vec!["atom.xml"]);
+}
+
+#[test]
+fn write_overwrites_existing_xml_for_same_name() {
+    let dir = TempDir::new().expect("tempdir");
+    let w = writer(&dir);
+
+    let first = sample("same", &["/a.jpg", "/b.jpg"]);
+    w.write(&first).expect("first write");
+
+    let second = sample("same", &["/c.jpg", "/d.jpg"]);
+    let path = w.write(&second).expect("second write");
+
+    let body = std::fs::read_to_string(path).unwrap();
+    // First-run pictures are gone, second-run pictures present.
+    assert!(!body.contains("a.jpg"));
+    assert!(!body.contains("b.jpg"));
+    assert!(body.contains("/c.jpg"));
+    assert!(body.contains("/d.jpg"));
+}
+
+#[test]
+fn write_xml_escapes_paths_with_reserved_characters() {
+    let dir = TempDir::new().expect("tempdir");
+    let w = writer(&dir);
+    let s = WallpaperSlideshow::new(
+        "escape",
+        vec![
+            PathBuf::from("/pics/a&b.jpg"),
+            PathBuf::from("/pics/<c>.jpg"),
+        ],
+        60,
+        false,
+    )
+    .unwrap();
+
+    let body = std::fs::read_to_string(w.write(&s).unwrap()).unwrap();
+    // `&` must become `&amp;`, `<` must become `&lt;` — otherwise the
+    // XML doesn't parse and GNOME falls back to a solid colour.
+    assert!(body.contains("a&amp;b.jpg"));
+    assert!(body.contains("&lt;c&gt;.jpg"));
+}
+
+#[test]
+fn delete_is_idempotent_for_missing_file() {
+    let dir = TempDir::new().expect("tempdir");
+    let w = writer(&dir);
+    // File does not exist yet — delete should not error.
+    w.delete("nonexistent").expect("idempotent delete");
+}
+
+#[test]
+fn delete_removes_previously_written_xml() {
+    let dir = TempDir::new().expect("tempdir");
+    let w = writer(&dir);
+    let s = sample("todelete", &["/a.jpg", "/b.jpg"]);
+    let path = w.write(&s).expect("write");
+    assert!(path.exists());
+
+    w.delete("todelete").expect("delete");
+    assert!(!path.exists());
+}

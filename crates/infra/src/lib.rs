@@ -26,6 +26,7 @@ pub mod theme_paths;
 mod theme_writer;
 mod theming_conflict_detector;
 mod vscode_themer;
+pub mod wallpaper_slideshow_xml;
 pub mod window_decoration_probe;
 
 pub use blur_my_shell::GSettingsBlurMyShell;
@@ -44,4 +45,5 @@ pub use pkexec_gdm_themer::PkexecGdmThemer;
 pub use theme_writer::FilesystemThemeWriter;
 pub use theming_conflict_detector::GioThemingConflictDetector;
 pub use vscode_themer::VscodeThemer;
+pub use wallpaper_slideshow_xml::{render_slideshow_xml, XdgWallpaperSlideshowWriter};
 pub use window_decoration_probe::WmctrlDecorationProbe;

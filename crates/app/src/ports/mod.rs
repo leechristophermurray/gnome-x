@@ -23,6 +23,7 @@ mod shell_proxy;
 mod theme_css;
 mod theme_writer;
 mod theming_conflict_detector;
+mod wallpaper_slideshow_writer;
 mod window_decoration_probe;
 
 pub use app_launcher_overrides::*;
@@ -42,4 +43,5 @@ pub use shell_proxy::*;
 pub use theme_css::*;
 pub use theme_writer::*;
 pub use theming_conflict_detector::*;
+pub use wallpaper_slideshow_writer::*;
 pub use window_decoration_probe::*;

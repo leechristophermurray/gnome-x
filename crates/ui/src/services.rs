@@ -13,13 +13,14 @@ use gnomex_app::ports::{
 };
 use gnomex_app::use_cases::{
     ApplyThemeUseCase, BrowseUseCase, CustomizeShellUseCase, CustomizeUseCase, ManageUseCase,
-    PacksUseCase,
+    PacksUseCase, WallpaperSlideshowUseCase,
 };
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, DesktopAppLauncherOverrides, EgoClient, FilesystemInstaller,
     FilesystemThemeWriter, GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell,
     GSettingsFloatingDock, GSettingsMutter, GioThemingConflictDetector, OcsClient,
     PackTomlStorage, PkexecGdmThemer, VscodeThemer, WmctrlDecorationProbe,
+    XdgWallpaperSlideshowWriter,
 };
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -34,6 +35,7 @@ pub struct AppServices {
     pub packs: Arc<PacksUseCase>,
     pub apply_theme: Arc<ApplyThemeUseCase>,
     pub customize_shell: Arc<CustomizeShellUseCase>,
+    pub wallpaper_slideshow: Arc<WallpaperSlideshowUseCase>,
     pub floating_dock: Arc<dyn FloatingDockController>,
     pub blur_my_shell: Arc<dyn BlurMyShellController>,
     pub conflict_detector: Arc<dyn ThemingConflictDetector>,
@@ -144,6 +146,19 @@ impl AppServices {
         let decoration_probe: Arc<dyn WindowDecorationProbe> =
             Arc::new(WmctrlDecorationProbe::new());
 
+        // GXF-072: wallpaper slideshow. Reuses the shared GSettings
+        // appearance adapter so a successful Apply also pokes
+        // picture-uri / picture-uri-dark for live playback.
+        let slideshow_writer: Arc<dyn gnomex_app::ports::WallpaperSlideshowWriter> =
+            Arc::new(XdgWallpaperSlideshowWriter::new());
+        let wallpaper_slideshow = Arc::new(WallpaperSlideshowUseCase::new(
+            slideshow_writer,
+            // apply_theme already owns `appearance` internally, but we
+            // need a fresh handle — the GSettingsAppearance struct is
+            // cheap enough to re-instantiate.
+            Arc::new(GSettingsAppearance::new()),
+        ));
+
         Self {
             handle,
             browse,
@@ -152,6 +167,7 @@ impl AppServices {
             packs,
             apply_theme,
             customize_shell,
+            wallpaper_slideshow,
             floating_dock,
             blur_my_shell,
             conflict_detector,
