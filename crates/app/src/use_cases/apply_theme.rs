@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ports::{
-    AppLauncherOverrides, AppearanceSettings, ExternalAppThemer, MutterSettings,
+    AppLauncherOverrides, AppearanceSettings, ExternalAppThemer, GdmThemer, MutterSettings,
     ThemeCssGenerator, ThemeWriter,
 };
 use crate::AppError;
 use gnomex_domain::{ExternalThemeSpec, ScalingSpec, ThemeSpec};
 use std::sync::Arc;
 
-const CUSTOM_THEME_NAME: &str = "GNOME-X-Custom";
+/// Name of the custom shell theme directory GNOME X authors under
+/// `~/.local/share/themes/`. Exposed so callers wiring the GDM
+/// themer can forward the same name across the polkit boundary.
+pub const CUSTOM_THEME_NAME: &str = "GNOME-X-Custom";
 
 /// Use case: apply or reset a ThemeSpec via version-appropriate CSS generation.
 ///
@@ -29,6 +32,11 @@ pub struct ApplyThemeUseCase {
     /// Optional per-app `.desktop` override adapter. Same treatment as
     /// `mutter` above.
     app_launcher: Option<Arc<dyn AppLauncherOverrides>>,
+    /// Optional GDM (login-screen) themer. Requires polkit elevation;
+    /// off by default. When present AND explicitly enabled per-call,
+    /// the use case forwards the accent + theme-name to the GDM
+    /// dconf database. See GXF-003.
+    gdm: Option<Arc<dyn GdmThemer>>,
 }
 
 impl ApplyThemeUseCase {
@@ -44,6 +52,7 @@ impl ApplyThemeUseCase {
             external_themers: Vec::new(),
             mutter: None,
             app_launcher: None,
+            gdm: None,
         }
     }
 
@@ -69,6 +78,15 @@ impl ApplyThemeUseCase {
         launcher: Arc<dyn AppLauncherOverrides>,
     ) -> Self {
         self.app_launcher = Some(launcher);
+        self
+    }
+
+    /// Register the GDM (login-screen) themer. Without it,
+    /// [`apply_to_gdm`] is a no-op and the `also_gdm` caller flag is
+    /// silently ignored — the themer is optional infrastructure so
+    /// headless tests that don't care about GDM keep compiling.
+    pub fn with_gdm_themer(mut self, gdm: Arc<dyn GdmThemer>) -> Self {
+        self.gdm = Some(gdm);
         self
     }
 
@@ -153,6 +171,36 @@ impl ApplyThemeUseCase {
         Ok(())
     }
 
+    /// Propagate the current theme name + accent to GDM via the
+    /// registered `GdmThemer` (polkit-elevated). Returns
+    /// `AppError::Settings` if no themer is wired (caller opted in
+    /// without providing one) so the UI can surface a clear error
+    /// instead of silently doing nothing.
+    ///
+    /// Only the theme NAME + accent are forwarded across the polkit
+    /// boundary. The elevated helper re-validates both.
+    pub fn apply_to_gdm(
+        &self,
+        theme_name: &str,
+        accent: &gnomex_domain::HexColor,
+    ) -> Result<(), AppError> {
+        let gdm = self
+            .gdm
+            .as_ref()
+            .ok_or_else(|| AppError::Settings("gdm themer not wired".into()))?;
+        gdm.apply(theme_name, accent)
+    }
+
+    /// Remove GNOME X's GDM overrides via the registered `GdmThemer`.
+    /// Mirrors [`apply_to_gdm`]'s "no themer = error" contract.
+    pub fn reset_gdm(&self) -> Result<(), AppError> {
+        let gdm = self
+            .gdm
+            .as_ref()
+            .ok_or_else(|| AppError::Settings("gdm themer not wired".into()))?;
+        gdm.reset()
+    }
+
     /// The GNOME version this gen_mock targets.
     pub fn detected_version(&self) -> &str {
         self.gen_mock.version_label()
@@ -177,7 +225,7 @@ impl ApplyThemeUseCase {
 mod tests {
     use super::*;
     use crate::testing::{
-        sample_theme_spec, MockAppearance, MockCssGenerator, MockExternalThemer,
+        sample_theme_spec, MockAppearance, MockCssGenerator, MockExternalThemer, MockGdmThemer,
         MockThemeWriter,
     };
 
@@ -289,6 +337,56 @@ mod tests {
         spec.panel.tint = gnomex_domain::HexColor::new("#f5f5f5").unwrap();
         let ext = external_spec_from(&spec);
         assert!(!ext.color_scheme.is_dark());
+    }
+
+    #[test]
+    fn apply_to_gdm_errors_when_no_themer_wired() {
+        let (uc, _, _, _) = make();
+        let accent = gnomex_domain::HexColor::new("#3584e4").unwrap();
+        let err = uc.apply_to_gdm(CUSTOM_THEME_NAME, &accent).unwrap_err();
+        match err {
+            AppError::Settings(s) => assert!(s.contains("gdm themer not wired")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_to_gdm_forwards_to_themer() {
+        let (uc, _, _, _) = make();
+        let gdm = MockGdmThemer::new();
+        let uc = uc.with_gdm_themer(gdm.clone());
+
+        let accent = gnomex_domain::HexColor::new("#3584e4").unwrap();
+        uc.apply_to_gdm(CUSTOM_THEME_NAME, &accent).unwrap();
+
+        let calls = gdm.applies.lock().unwrap().clone();
+        assert_eq!(calls, vec![(CUSTOM_THEME_NAME.into(), "#3584e4".into())]);
+    }
+
+    #[test]
+    fn reset_gdm_forwards_to_themer() {
+        let (uc, _, _, _) = make();
+        let gdm = MockGdmThemer::new();
+        let uc = uc.with_gdm_themer(gdm.clone());
+
+        uc.reset_gdm().unwrap();
+
+        assert_eq!(*gdm.resets.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn apply_without_gdm_toggle_does_not_touch_gdm_themer() {
+        // Regression: the base `apply(&spec)` path must never call
+        // the GDM themer on its own. GDM is opt-in per-call and
+        // goes through `apply_to_gdm`.
+        let (uc, _, _, _) = make();
+        let gdm = MockGdmThemer::new();
+        let uc = uc.with_gdm_themer(gdm.clone());
+
+        uc.apply(&sample_theme_spec()).unwrap();
+
+        assert!(gdm.applies.lock().unwrap().is_empty());
+        assert_eq!(*gdm.resets.lock().unwrap(), 0);
     }
 }
 

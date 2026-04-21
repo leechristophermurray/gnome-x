@@ -36,6 +36,17 @@ install -Dm644 data/io.github.gnomex.GnomeX.metainfo.xml.in \
 install -Dm644 data/io.github.gnomex.GnomeX.gschema.xml \
     "${DATADIR}/glib-2.0/schemas/io.github.gnomex.GnomeX.gschema.xml"
 
+# Polkit action — authorises `experiencectl gdm-apply` / `gdm-reset` to
+# run as root so the GNOME X theme can be propagated to the GDM
+# login screen. See docs/known-limitations.md (GDM section) and
+# GXF-003. The .policy file is installed into the system-wide
+# /usr/share/polkit-1/actions/ regardless of PREFIX — polkit does
+# not scan /usr/local/share by default. Off by default; users opt
+# in via the "Also apply to login screen" toggle.
+POLKIT_ACTIONS_DIR="/usr/share/polkit-1/actions"
+install -Dm644 data/org.gnomex.gdm-theme.policy \
+    "${POLKIT_ACTIONS_DIR}/org.gnomex.gdm-theme.policy"
+
 # Icons
 install -Dm644 data/icons/scalable/apps/io.github.gnomex.GnomeX.svg \
     "${DATADIR}/icons/hicolor/scalable/apps/io.github.gnomex.GnomeX.svg"

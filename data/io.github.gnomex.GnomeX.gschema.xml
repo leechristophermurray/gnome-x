@@ -235,6 +235,11 @@
       <summary>Per-app scale overrides (GXF-051)</summary>
       <description>Each entry is "APP_ID:SCALE" — e.g. "org.gnome.Nautilus:1.25". Applied on theme Apply by writing a modified ~/.local/share/applications/APP_ID.desktop. Allowed scales: 0.5, 1.0, 1.25, 1.5, 1.75, 2.0.</description>
     </key>
+    <key name="apply-gdm-on-theme-apply" type="b">
+      <default>false</default>
+      <summary>Also apply theme to GDM login screen (GXF-003)</summary>
+      <description>When true, applying a theme also propagates the shell-theme name and accent colour to the GDM dconf database via a polkit-elevated helper. Off by default because it requires an admin password prompt. Only the name + accent are forwarded — no paths, no CSS. See docs/known-limitations.md (GDM section).</description>
+    </key>
     <key name="cached-wallpaper-palette" type="as">
       <default>[]</default>
       <summary>Cached wallpaper palette</summary>

@@ -19,7 +19,7 @@
 
 use crate::ports::{
     AppSettings, AppearanceSettings, BlurMyShellController, ContentRepository,
-    ExternalAppThemer, ExtensionRepository, FloatingDockController, LocalInstaller,
+    ExternalAppThemer, ExtensionRepository, FloatingDockController, GdmThemer, LocalInstaller,
     PackStorage, PackSummary, ShellCustomizer, ShellProxy, ThemeCss, ThemeCssGenerator,
     ThemeWriter,
 };
@@ -27,8 +27,8 @@ use crate::AppError;
 use async_trait::async_trait;
 use gnomex_domain::{
     ContentCategory, ContentId, ContentItem, ExperiencePack, Extension, ExtensionUuid,
-    ExternalThemeSpec, GSettingOverride, PanelPosition, SearchResult, ShellTweak, ShellTweakId,
-    ShellVersion, ThemeSpec, ThemeType, TweakValue,
+    ExternalThemeSpec, GSettingOverride, HexColor, PanelPosition, SearchResult, ShellTweak,
+    ShellTweakId, ShellVersion, ThemeSpec, ThemeType, TweakValue,
 };
 use std::sync::{Arc, Mutex};
 
@@ -187,6 +187,36 @@ impl ExternalAppThemer for MockExternalThemer {
     }
     fn apply(&self, spec: &ExternalThemeSpec) -> Result<(), AppError> {
         self.applies.lock().unwrap().push(spec.clone());
+        Ok(())
+    }
+    fn reset(&self) -> Result<(), AppError> {
+        *self.resets.lock().unwrap() += 1;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GdmThemer
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+pub struct MockGdmThemer {
+    pub applies: Mutex<Vec<(String, String)>>,
+    pub resets: Mutex<u32>,
+}
+
+impl MockGdmThemer {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+}
+
+impl GdmThemer for MockGdmThemer {
+    fn apply(&self, theme_name: &str, accent: &HexColor) -> Result<(), AppError> {
+        self.applies
+            .lock()
+            .unwrap()
+            .push((theme_name.to_owned(), accent.as_str().to_owned()));
         Ok(())
     }
     fn reset(&self) -> Result<(), AppError> {

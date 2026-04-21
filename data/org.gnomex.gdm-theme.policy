@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  GNOME X — polkit action for applying theme overrides to the GDM login
+  screen. The elevated helper invoked through this action is a small,
+  fixed-purpose binary (experiencectl gdm-apply) that writes a single
+  dconf snippet under /etc/dconf/db/gdm.d/ and runs `dconf update`.
+  See docs/known-limitations.md (GDM section) for the rationale.
+-->
+<policyconfig>
+
+  <vendor>GNOME X</vendor>
+  <vendor_url>https://github.com/leechristophermurray/gnome-x</vendor_url>
+
+  <action id="org.gnomex.gdm-theme.apply">
+    <description>Apply GNOME X theme to the GDM login screen</description>
+    <message>Authentication is required to apply the theme to the GDM login screen</message>
+    <defaults>
+      <allow_any>auth_admin_keep</allow_any>
+      <allow_inactive>auth_admin_keep</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/experiencectl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <action id="org.gnomex.gdm-theme.reset">
+    <description>Remove GNOME X theme overrides from the GDM login screen</description>
+    <message>Authentication is required to remove GNOME X theme overrides from the GDM login screen</message>
+    <defaults>
+      <allow_any>auth_admin_keep</allow_any>
+      <allow_inactive>auth_admin_keep</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/experiencectl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+</policyconfig>

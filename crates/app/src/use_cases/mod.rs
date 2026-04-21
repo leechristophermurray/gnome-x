@@ -5,6 +5,7 @@ pub mod apply_theme;
 mod browse;
 mod customize;
 mod customize_shell;
+pub mod gdm_theme;
 mod manage;
 mod packs;
 

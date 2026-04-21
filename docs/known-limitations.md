@@ -86,11 +86,63 @@ for the tracker on per-context font adjustment.
 
 ## GDM (login screen) theming
 
-GDM runs under its own user with its own GSettings database and
-cannot read user CSS. Applying a GNOME X theme does not change the
-login screen. See
-[GXF-003](https://github.com/leechristophermurray/gnome-x/issues/4)
-for the plan to support GDM via polkit-elevated writes.
+GDM runs under its own user (`gdm`) with its own GSettings database
+and cannot read user CSS. Applying a GNOME X theme does not, by
+itself, change the login screen — a user-level write to
+`~/.config/gtk-4.0/gtk.css` or `~/.local/share/themes/` is not
+visible to the `gdm` user.
+
+### What GNOME X can do now (GXF-003)
+
+GNOME X ships an **optional** pathway that elevates through polkit
+and writes a small dconf snippet to the GDM database:
+
+- **Toggle** — `apply-gdm-on-theme-apply` in our GSettings schema
+  (Preferences → *Also apply to login screen*). Off by default.
+- **Polkit action** — `org.gnomex.gdm-theme.apply` and
+  `org.gnomex.gdm-theme.reset`, installed to
+  `/usr/share/polkit-1/actions/org.gnomex.gdm-theme.policy`. Both
+  require `auth_admin_keep` (admin password, cached for the session).
+- **Elevated helper** — the hidden subcommands
+  `experiencectl gdm-apply --theme <NAME> --accent <#rrggbb>` and
+  `experiencectl gdm-reset`. These run as root via `pkexec` and
+  write `/etc/dconf/db/gdm.d/90-gnome-x` before calling
+  `dconf update` (and `restorecon` on SELinux systems, best-effort).
+
+### Scope, v1
+
+- We forward the **shell theme NAME** and the **accent colour name**
+  (mapped to the nearest stock GNOME accent swatch). That's it. No
+  CSS, no paths, no arbitrary hex — GDM's Shell expects the stock
+  palette and rejects unknown names.
+- Files we author always contain the literal substring `"GNOME X"`
+  so `gdm-reset` can refuse to delete a file that isn't ours.
+- On Fedora / RHEL, the helper runs `restorecon -R
+  /etc/dconf/db/gdm.d/` so SELinux file contexts stay correct
+  after the write. If `restorecon` is missing (Ubuntu / Arch
+  defaults), that step is a silent no-op.
+
+### What's still out of scope
+
+- **Login-screen background images.** Controllable in theory via
+  the same dconf surface, but the image itself lives in a path
+  readable by the `gdm` user — a different problem and a larger
+  attack surface. Not in v1.
+- **Arbitrary distro GDM paths.** We target the Fedora / Ubuntu /
+  Arch convention of `/etc/dconf/db/gdm.d/`. Distros with a
+  different GDM config mechanism (e.g. non-dconf) need a separate
+  adapter.
+- **Full visual parity.** GDM's GNOME Shell runs a vendor-default
+  GTK theme and will not pick up a `GNOME-X-Custom` shell theme
+  bundle the way a logged-in session does. What the user sees at
+  the login screen is the stock GNOME Shell with our theme NAME +
+  accent applied on top — strongly consistent, but not byte-for-byte
+  identical to the logged-in view.
+
+### Tracker
+
+- [GXF-003](https://github.com/leechristophermurray/gnome-x/issues/4)
+  — this feature
 
 ---
 
