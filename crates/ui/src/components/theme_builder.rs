@@ -3049,7 +3049,14 @@ impl SimpleComponent for ThemeBuilderModel {
                             // Icon recolour is a best-effort side
                             // channel — we toast the user about the
                             // outcome but never fail the main apply.
-                            if self.recolor_icons {
+                            // MD3 mode implicitly enables recolour
+                            // because the whole "track the wallpaper"
+                            // experience falls apart if folder icons
+                            // don't follow. The apply path already
+                            // wrote the MD3-derived accent to
+                            // GSettings, so reading accent-color here
+                            // reflects the fresh value either way.
+                            if self.recolor_icons || self.material_enabled {
                                 let iface = gio::Settings::new("org.gnome.desktop.interface");
                                 let accent = iface.string("accent-color").to_string();
                                 match self.apply_uc.recolor_icons(&accent, true) {

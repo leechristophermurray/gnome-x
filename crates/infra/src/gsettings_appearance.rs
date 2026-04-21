@@ -104,4 +104,29 @@ impl AppearanceSettings for GSettingsAppearance {
         Self::set_string(BG_SCHEMA, "picture-uri-dark", uri)?;
         Ok(())
     }
+
+    fn get_accent_color(&self) -> Result<String, AppError> {
+        Self::get_string(IFACE_SCHEMA, "accent-color")
+    }
+
+    fn set_accent_color(&self, id: &str) -> Result<(), AppError> {
+        // Same same-value-suppression story as `set_wallpaper`. For
+        // icons in particular the bounce is load-bearing: Adwaita
+        // 47+ recolours folder icons on the `changed::accent-color`
+        // signal, and if we're re-applying because the wallpaper
+        // cycled to a new image that happens to map to the same
+        // stock GNOME accent (very common — there are only 9 to
+        // pick from), Adwaita would otherwise never get the nudge
+        // to re-evaluate. Bouncing through a different valid enum
+        // value (`blue` unless we're already on it, else `slate`)
+        // forces the signal. The flicker is invisible because the
+        // flush-to-target write follows immediately.
+        let current = Self::get_string(IFACE_SCHEMA, "accent-color").unwrap_or_default();
+        if current == id {
+            let bounce_via = if id == "blue" { "slate" } else { "blue" };
+            Self::set_string(IFACE_SCHEMA, "accent-color", bounce_via)?;
+        }
+        Self::set_string(IFACE_SCHEMA, "accent-color", id)?;
+        Ok(())
+    }
 }

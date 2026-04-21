@@ -188,6 +188,14 @@ impl ApplyThemeUseCase {
     /// Material derivation. Returns `None` if the palette provider
     /// isn't wired or the wallpaper cache has fewer than three
     /// colours yet — caller falls back to the user-supplied overrides.
+    ///
+    /// Side-effect: also writes the nearest GNOME enum accent id to
+    /// `org.gnome.desktop.interface accent-color` so Adwaita folder
+    /// icons track the MD3 primary, and kicks the icon recolourer
+    /// (Papirus / etc.) with that accent. Without this, MD3 changes
+    /// the widget CSS but the accent-driven icon tokens (folder
+    /// colour, sidebar icons, symbolic tinting) stay on whatever
+    /// the user last set manually.
     fn derive_material_spec(&self, spec: &ThemeSpec) -> Option<ThemeSpec> {
         let provider = self.palette.as_ref()?;
         let palette = provider.top3()?;
@@ -196,8 +204,27 @@ impl ApplyThemeUseCase {
         let overrides = derive_md3_overrides(&day, &night, spec.tint.intensity);
         let mut copy = spec.clone();
         copy.widget_colors = overrides;
+
+        // Propagate the MD3 primary to the GNOME accent enum so
+        // icon themes (Adwaita natively, Papirus via recolourer)
+        // follow. The *day* primary wins the enum write — Adwaita's
+        // dark variant of any accent id is a rehue of the same
+        // base so we don't need a day/night split here.
+        let (r, g, b) = day.primary.to_rgb();
+        let accent_id = gnomex_domain::color::closest_gnome_accent_id(r, g, b);
+        if let Err(e) = self.appearance.set_accent_color(&accent_id) {
+            tracing::warn!("MD3: failed to write accent-color={accent_id}: {e}");
+        }
+        // Kick the icon recolorer with the same accent. Safe when
+        // unwired; caller's `recolor_icons` toggle is bypassed here
+        // because MD3 mode is an implicit opt-in to the whole
+        // appearance.
+        if let Err(e) = self.recolor_icons(&accent_id, true) {
+            tracing::warn!("MD3: icon recolour failed: {e}");
+        }
+
         tracing::info!(
-            "material-palette applied (day={:?}, night={:?})",
+            "material-palette applied (day={:?}, night={:?}, accent={accent_id})",
             spec.material_palette.day_permutation,
             spec.material_palette.night_permutation,
         );

@@ -142,6 +142,47 @@ pub fn lab_distance(a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
     (dl * dl + da * da + db * db).sqrt()
 }
 
+// ---------------- Nearest GNOME enum accent -----------------------
+//
+// `org.gnome.desktop.interface accent-color` is an enum; external
+// tools (Adwaita's native folder-colour tinting, Papirus-folders)
+// all take one of the nine named values. This helper exists in the
+// domain (not infra) because Material-palette derivation needs it
+// to propagate a derived hex into the stock enum.
+
+/// GNOME's nine stock accents, keyed by their GSettings enum id.
+/// Hexes match the palette Adwaita ships for each variant.
+pub const GNOME_ACCENTS: &[(&str, (u8, u8, u8))] = &[
+    ("blue", (0x35, 0x84, 0xe4)),
+    ("teal", (0x21, 0x90, 0xa4)),
+    ("green", (0x3a, 0x94, 0x4a)),
+    ("yellow", (0xc8, 0x88, 0x00)),
+    ("orange", (0xed, 0x5b, 0x00)),
+    ("red", (0xe6, 0x2d, 0x42)),
+    ("pink", (0xd5, 0x61, 0x99)),
+    ("purple", (0x91, 0x41, 0xac)),
+    ("slate", (0x6f, 0x83, 0x96)),
+];
+
+/// Map an (r, g, b) triple to the nearest GNOME enum accent id by
+/// CIE76 ΔE. Same classifier the LAB wallpaper extractor uses; kept
+/// public so MD3 can propagate derived primary colours into the
+/// stock accent enum without re-implementing the distance metric.
+pub fn closest_gnome_accent_id(r: u8, g: u8, b: u8) -> String {
+    let candidate = rgb_to_lab(r, g, b);
+    let mut best = "blue";
+    let mut best_d = f32::MAX;
+    for &(id, (ar, ag, ab)) in GNOME_ACCENTS {
+        let accent = rgb_to_lab(ar, ag, ab);
+        let d = lab_distance(candidate, accent);
+        if d < best_d {
+            best_d = d;
+            best = id;
+        }
+    }
+    best.to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,7 +8,8 @@
 //! `widget_colors` the caller originally supplied).
 
 use gnomex_app::ports::{
-    AppearanceSettings, ThemeCss, ThemeCssGenerator, ThemeWriter, WallpaperPaletteProvider,
+    AppearanceSettings, IconThemeRecolorer, RecolorOutcome, ThemeCss, ThemeCssGenerator,
+    ThemeWriter, WallpaperPaletteProvider,
 };
 use gnomex_app::use_cases::ApplyThemeUseCase;
 use gnomex_app::AppError;
@@ -54,7 +55,9 @@ impl ThemeWriter for NoopWriter {
 }
 
 #[derive(Default)]
-struct NoopAppearance;
+struct NoopAppearance {
+    accent_writes: Mutex<Vec<String>>,
+}
 impl AppearanceSettings for NoopAppearance {
     fn get_gtk_theme(&self) -> Result<String, AppError> {
         Ok(String::new())
@@ -85,6 +88,26 @@ impl AppearanceSettings for NoopAppearance {
     }
     fn set_wallpaper(&self, _: &str) -> Result<(), AppError> {
         Ok(())
+    }
+    fn get_accent_color(&self) -> Result<String, AppError> {
+        Ok(String::new())
+    }
+    fn set_accent_color(&self, id: &str) -> Result<(), AppError> {
+        self.accent_writes.lock().unwrap().push(id.to_owned());
+        Ok(())
+    }
+}
+
+/// Captures every accent id the use case routes through the
+/// recolorer so tests can assert MD3 kicked it.
+#[derive(Default)]
+struct SpyRecolorer {
+    calls: Mutex<Vec<String>>,
+}
+impl IconThemeRecolorer for SpyRecolorer {
+    fn recolor(&self, accent_id: &str) -> Result<RecolorOutcome, AppError> {
+        self.calls.lock().unwrap().push(accent_id.to_owned());
+        Ok(RecolorOutcome::NativelyTracks("Test".into()))
     }
 }
 
@@ -119,7 +142,7 @@ fn spec_with_user_overrides() -> ThemeSpec {
 fn md3_disabled_passes_user_widget_colors_through() {
     let generator = Arc::new(CapturingCssGen::default());
     let writer = Arc::new(NoopWriter);
-    let appearance = Arc::new(NoopAppearance);
+    let appearance = Arc::new(NoopAppearance::default());
     let palette = Arc::new(StubPalette(Some(rgb_hex())));
     let uc = ApplyThemeUseCase::new(generator.clone(), writer, appearance)
         .with_palette_provider(palette);
@@ -136,7 +159,7 @@ fn md3_disabled_passes_user_widget_colors_through() {
 fn md3_enabled_overwrites_widget_colors_from_palette() {
     let generator = Arc::new(CapturingCssGen::default());
     let writer = Arc::new(NoopWriter);
-    let appearance = Arc::new(NoopAppearance);
+    let appearance = Arc::new(NoopAppearance::default());
     let palette = Arc::new(StubPalette(Some(rgb_hex())));
     let uc = ApplyThemeUseCase::new(generator.clone(), writer, appearance)
         .with_palette_provider(palette);
@@ -169,7 +192,7 @@ fn md3_enabled_overwrites_widget_colors_from_palette() {
 fn md3_enabled_but_palette_empty_falls_back_to_user_overrides() {
     let generator = Arc::new(CapturingCssGen::default());
     let writer = Arc::new(NoopWriter);
-    let appearance = Arc::new(NoopAppearance);
+    let appearance = Arc::new(NoopAppearance::default());
     // Palette provider returns None — simulates first-run before
     // the daemon has extracted anything.
     let palette = Arc::new(StubPalette(None));
@@ -196,7 +219,7 @@ fn md3_enabled_with_no_provider_is_noop() {
     // MD3 mode silently degrades to the user's static overrides.
     let generator = Arc::new(CapturingCssGen::default());
     let writer = Arc::new(NoopWriter);
-    let appearance = Arc::new(NoopAppearance);
+    let appearance = Arc::new(NoopAppearance::default());
     let uc = ApplyThemeUseCase::new(generator.clone(), writer, appearance);
 
     let mut s = spec_with_user_overrides();
@@ -214,7 +237,7 @@ fn md3_enabled_with_no_provider_is_noop() {
 fn md3_applies_day_and_night_permutations_independently() {
     let generator = Arc::new(CapturingCssGen::default());
     let writer = Arc::new(NoopWriter);
-    let appearance = Arc::new(NoopAppearance);
+    let appearance = Arc::new(NoopAppearance::default());
     let palette = Arc::new(StubPalette(Some(rgb_hex())));
     let uc = ApplyThemeUseCase::new(generator.clone(), writer, appearance)
         .with_palette_provider(palette);
@@ -235,4 +258,63 @@ fn md3_applies_day_and_night_permutations_independently() {
     let (_, _, db) = captured.widget_colors.button_bg_dark.as_ref().unwrap().to_rgb();
     assert!(lg > 50, "light button should lean green, got g={lg}");
     assert!(db > 50, "dark button should lean blue, got b={db}");
+}
+
+#[test]
+fn md3_writes_nearest_gnome_accent_to_settings_and_kicks_recolorer() {
+    // The complaint from real testing: MD3 paints widget CSS but
+    // folder icons don't follow because `accent-color` never
+    // changes. The use case must propagate the MD3 primary to
+    // both AppearanceSettings.set_accent_color AND the icon
+    // recolorer, so Adwaita + Papirus both see fresh input.
+    let generator = Arc::new(CapturingCssGen::default());
+    let writer = Arc::new(NoopWriter);
+    let appearance = Arc::new(NoopAppearance::default());
+    let palette = Arc::new(StubPalette(Some(rgb_hex())));
+    let recolorer = Arc::new(SpyRecolorer::default());
+    let uc = ApplyThemeUseCase::new(generator.clone(), writer, appearance.clone())
+        .with_palette_provider(palette)
+        .with_icon_recolorer(recolorer.clone());
+
+    let mut s = spec_with_user_overrides();
+    s.material_palette = MaterialPaletteSpec {
+        enabled: true,
+        // Day primary = palette[1] = #00ff00 → nearest GNOME accent is
+        // "green".
+        day_permutation: Permutation::Bg0Pri1Sec2,
+        night_permutation: Permutation::Bg0Pri1Sec2,
+    };
+    s.tint.intensity = gnomex_domain::Opacity::from_fraction(1.0).unwrap();
+    uc.apply(&s).unwrap();
+
+    let writes = appearance.accent_writes.lock().unwrap();
+    assert_eq!(*writes, vec!["green".to_string()]);
+
+    let calls = recolorer.calls.lock().unwrap();
+    assert_eq!(*calls, vec!["green".to_string()]);
+}
+
+#[test]
+fn md3_propagates_night_pri_ignored_because_accent_enum_is_scheme_agnostic() {
+    // The accent enum is one id for the whole system; we pick day
+    // pri so accent stays stable across the scheme flip. A night-only
+    // permutation change should NOT retrigger an accent-color write.
+    let generator = Arc::new(CapturingCssGen::default());
+    let writer = Arc::new(NoopWriter);
+    let appearance = Arc::new(NoopAppearance::default());
+    let palette = Arc::new(StubPalette(Some(rgb_hex())));
+    let uc = ApplyThemeUseCase::new(generator.clone(), writer, appearance.clone())
+        .with_palette_provider(palette);
+
+    let mut s = spec_with_user_overrides();
+    s.material_palette = MaterialPaletteSpec {
+        enabled: true,
+        day_permutation: Permutation::Bg0Pri1Sec2,   // day pri = green
+        night_permutation: Permutation::Bg0Pri2Sec1, // night pri = blue
+    };
+    s.tint.intensity = gnomex_domain::Opacity::from_fraction(1.0).unwrap();
+    uc.apply(&s).unwrap();
+
+    let writes = appearance.accent_writes.lock().unwrap();
+    assert_eq!(*writes, vec!["green".to_string()], "day pri should drive accent");
 }
