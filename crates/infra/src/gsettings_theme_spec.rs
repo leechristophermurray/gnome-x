@@ -13,9 +13,9 @@ use gio::prelude::*;
 use gnomex_app::AppError;
 use gnomex_domain::{
     DashSpec, ForegroundSpec, HeaderbarSpec, HexColor, InsetSpec, LayerSeparationSpec,
-    NotificationSpec, Opacity, PanelSpec, PerAppScaleOverride, Radius, ScaleFactor, ScalingSpec,
-    SidebarSpec, StatusColorSpec, TextScaling, ThemeSpec, TintSpec, WidgetColorOverrides,
-    WidgetStyleSpec, WindowFrameSpec,
+    MaterialPaletteSpec, NotificationSpec, Opacity, PanelSpec, PerAppScaleOverride, Permutation,
+    Radius, ScaleFactor, ScalingSpec, SidebarSpec, StatusColorSpec, TextScaling, ThemeSpec,
+    TintSpec, WidgetColorOverrides, WidgetStyleSpec, WindowFrameSpec,
 };
 
 const APP_SCHEMA: &str = "io.github.gnomex.GnomeX";
@@ -105,6 +105,11 @@ pub fn build_theme_spec_from_gsettings() -> Result<ThemeSpec, AppError> {
         },
         overview_blur: app.boolean("tb-overview-blur"),
         scaling: build_scaling_from_gsettings(&app)?,
+        material_palette: MaterialPaletteSpec {
+            enabled: app.boolean("tb-md-enabled"),
+            day_permutation: Permutation::from_index(app.uint("tb-md-day-perm")),
+            night_permutation: Permutation::from_index(app.uint("tb-md-night-perm")),
+        },
     })
 }
 

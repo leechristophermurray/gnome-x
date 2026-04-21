@@ -50,6 +50,13 @@ pub struct ThemeBuilderModel {
     overview_blur: bool,
     // Icon theme recolour — applies the accent to folder icons on Apply.
     recolor_icons: bool,
+    // Material-palette wallpaper theming — when on, hides per-widget
+    // colour controls and drives buttons/entries/headerbar/sidebar
+    // from the active wallpaper's top-3 palette via a user-chosen
+    // permutation per colour scheme.
+    material_enabled: bool,
+    material_day_perm: u32,
+    material_night_perm: u32,
     // Headerbar / CSD
     headerbar_height: f64,
     headerbar_shadow: f64,
@@ -149,6 +156,9 @@ pub enum ThemeBuilderMsg {
     SetDashOpacity(f64),
     SetOverviewBlur(bool),
     SetRecolorIcons(bool),
+    SetMaterialEnabled(bool),
+    SetMaterialDayPerm(u32),
+    SetMaterialNightPerm(u32),
     SetFloatingDock(bool),
     SetSharedTinting(bool),
     RefreshVisibility,
@@ -2016,8 +2026,109 @@ impl SimpleComponent for ThemeBuilderModel {
             scroll
         }
 
+        // === Material palette ===
+        // Top-level opt-in. When enabled, the accent-picker, widget-
+        // colour overrides, and the secondary scheme groups are all
+        // hidden — MD3 overrides them from the live wallpaper palette
+        // via `ApplyThemeUseCase::derive_material_spec`. Tint intensity
+        // stays visible because the derivation uses it as a strength
+        // knob.
+        let material_group = adw::PreferencesGroup::builder()
+            .title("Material Palette")
+            .description(
+                "Paint the desktop from the top three wallpaper colours. \
+                 Pick which colour plays the background, primary (buttons), \
+                 and secondary (field highlights) role \u{2014} separately \
+                 for the day and night colour schemes. Updates live when \
+                 the wallpaper changes.",
+            )
+            .build();
+
+        let material_toggle = adw::SwitchRow::builder()
+            .title("Wallpaper-driven palette")
+            .subtitle(
+                "Replaces the accent picker and widget-colour overrides \
+                 with a three-role palette derived from the wallpaper.",
+            )
+            .active(app_settings.boolean("tb-md-enabled"))
+            .build();
+        material_group.add(&material_toggle);
+
+        let material_day_combo = adw::ComboRow::builder()
+            .title("Day scheme")
+            .subtitle("Which colour plays each role under light mode")
+            .build();
+        let material_night_combo = adw::ComboRow::builder()
+            .title("Night scheme")
+            .subtitle("Which colour plays each role under dark mode")
+            .build();
+        {
+            use gnomex_domain::Permutation;
+            let labels = gtk::StringList::new(&[]);
+            for p in Permutation::ALL {
+                labels.append(p.label());
+            }
+            material_day_combo.set_model(Some(&labels));
+            let labels_night = gtk::StringList::new(&[]);
+            for p in Permutation::ALL {
+                labels_night.append(p.label());
+            }
+            material_night_combo.set_model(Some(&labels_night));
+            material_day_combo.set_selected(app_settings.uint("tb-md-day-perm"));
+            material_night_combo.set_selected(app_settings.uint("tb-md-night-perm"));
+        }
+        material_group.add(&material_day_combo);
+        material_group.add(&material_night_combo);
+
+        // Connect the combo rows now — the toggle handler is wired
+        // below so it can flip visibility on the rest of color_page.
+        {
+            let sender = sender.clone();
+            material_day_combo.connect_selected_notify(move |r| {
+                sender.input(ThemeBuilderMsg::SetMaterialDayPerm(r.selected()));
+            });
+        }
+        {
+            let sender = sender.clone();
+            material_night_combo.connect_selected_notify(move |r| {
+                sender.input(ThemeBuilderMsg::SetMaterialNightPerm(r.selected()));
+            });
+        }
+
+        // Visibility handler: when the toggle flips, every
+        // MD-superseded group on the color page vanishes or comes
+        // back. Kept as a standalone closure so the init path and
+        // the message handler both reuse it.
+        let other_color_groups: Vec<gtk::Widget> = vec![
+            accent_group.clone().upcast(),
+            shared_group.clone().upcast(),
+            panel_group.clone().upcast(),
+            dash_group.clone().upcast(),
+            notif_group.clone().upcast(),
+            scheme_group.clone().upcast(),
+        ];
+        let apply_material_visibility = {
+            let other_color_groups = other_color_groups.clone();
+            move |on: bool| {
+                for g in &other_color_groups {
+                    g.set_visible(!on);
+                }
+            }
+        };
+        apply_material_visibility(app_settings.boolean("tb-md-enabled"));
+
+        {
+            let sender = sender.clone();
+            let vis = apply_material_visibility.clone();
+            material_toggle.connect_active_notify(move |r| {
+                let on = r.is_active();
+                vis(on);
+                sender.input(ThemeBuilderMsg::SetMaterialEnabled(on));
+            });
+        }
+
         let color_page = build_category_page(
-            &[&accent_group, &tint_group, &shared_group, &panel_group, &dash_group, &notif_group, &scheme_group],
+            &[&material_group, &accent_group, &tint_group, &shared_group, &panel_group, &dash_group, &notif_group, &scheme_group],
         );
         let windows_page = build_category_page(
             &[&radii_group, &csd_group, &inset_group, &sidebar_group, &layer_group, &widget_style_group, &widget_colors_group, &window_group, &wm_group],
@@ -2159,6 +2270,9 @@ impl SimpleComponent for ThemeBuilderModel {
             dash_opacity: app_settings.double("tb-dash-opacity"),
             overview_blur: app_settings.boolean("tb-overview-blur"),
             recolor_icons: app_settings.boolean("tb-recolor-icons"),
+            material_enabled: app_settings.boolean("tb-md-enabled"),
+            material_day_perm: app_settings.uint("tb-md-day-perm"),
+            material_night_perm: app_settings.uint("tb-md-night-perm"),
             headerbar_height: app_settings.double("tb-headerbar-height"),
             headerbar_shadow: app_settings.double("tb-headerbar-shadow"),
             circular_buttons: app_settings.boolean("tb-circular-buttons"),
@@ -2464,6 +2578,32 @@ impl SimpleComponent for ThemeBuilderModel {
                 self.recolor_icons = v;
                 let app = gio::Settings::new("io.github.gnomex.GnomeX");
                 let _ = app.set_boolean("tb-recolor-icons", v);
+            }
+            ThemeBuilderMsg::SetMaterialEnabled(v) => {
+                self.material_enabled = v;
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_boolean("tb-md-enabled", v);
+                // Auto-apply so the user sees MD3 kick in (or fall
+                // back to the stored accent) without hunting for
+                // Apply. Toggle state is already persisted so the
+                // apply picks it up on the next `build_spec`.
+                sender.input(ThemeBuilderMsg::Apply);
+            }
+            ThemeBuilderMsg::SetMaterialDayPerm(v) => {
+                self.material_day_perm = v;
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_uint("tb-md-day-perm", v);
+                if self.material_enabled {
+                    sender.input(ThemeBuilderMsg::Apply);
+                }
+            }
+            ThemeBuilderMsg::SetMaterialNightPerm(v) => {
+                self.material_night_perm = v;
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_uint("tb-md-night-perm", v);
+                if self.material_enabled {
+                    sender.input(ThemeBuilderMsg::Apply);
+                }
             }
             ThemeBuilderMsg::SetFloatingDock(enabled) => {
                 // Persist the toggle even if neither our extension nor
@@ -3086,6 +3226,13 @@ impl ThemeBuilderModel {
                         })
                     })
                     .collect(),
+            },
+            material_palette: gnomex_domain::MaterialPaletteSpec {
+                enabled: self.material_enabled,
+                day_permutation: gnomex_domain::Permutation::from_index(self.material_day_perm),
+                night_permutation: gnomex_domain::Permutation::from_index(
+                    self.material_night_perm,
+                ),
             },
         })
     }

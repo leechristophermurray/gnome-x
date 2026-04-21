@@ -3,10 +3,10 @@
 
 use crate::ports::{
     AppLauncherOverrides, AppearanceSettings, ExternalAppThemer, GdmThemer, IconThemeRecolorer,
-    MutterSettings, RecolorOutcome, ThemeCssGenerator, ThemeWriter,
+    MutterSettings, RecolorOutcome, ThemeCssGenerator, ThemeWriter, WallpaperPaletteProvider,
 };
 use crate::AppError;
-use gnomex_domain::{ExternalThemeSpec, ScalingSpec, ThemeSpec};
+use gnomex_domain::{derive_md3_overrides, ExternalThemeSpec, ScalingSpec, ThemeSpec};
 use std::sync::Arc;
 
 /// Name of the custom shell theme directory GNOME X authors under
@@ -43,6 +43,11 @@ pub struct ApplyThemeUseCase {
     /// passes the accent id via `recolor_icons`, the adapter
     /// decides whether to shell out (Papirus) or no-op (Adwaita).
     icon_recolorer: Option<Arc<dyn IconThemeRecolorer>>,
+    /// Optional wallpaper-palette provider. Required for the
+    /// Material-palette branch (GXF material-theming); absent for
+    /// headless tests and for any apply where the user hasn't
+    /// enabled `spec.material_palette.enabled`.
+    palette: Option<Arc<dyn WallpaperPaletteProvider>>,
 }
 
 impl ApplyThemeUseCase {
@@ -60,6 +65,7 @@ impl ApplyThemeUseCase {
             app_launcher: None,
             gdm: None,
             icon_recolorer: None,
+            palette: None,
         }
     }
 
@@ -126,10 +132,40 @@ impl ApplyThemeUseCase {
         Ok(Some(outcome))
     }
 
+    /// Register the wallpaper palette provider used by Material-
+    /// palette theming. Without it, `spec.material_palette.enabled`
+    /// is honoured only as "do nothing" — we never mint overrides
+    /// from a palette we can't read. Headless unit tests skip this.
+    pub fn with_palette_provider(mut self, p: Arc<dyn WallpaperPaletteProvider>) -> Self {
+        self.palette = Some(p);
+        self
+    }
+
     /// Generate version-specific CSS and write it to disk. Then fan out to
     /// every registered external-app themer with a projection of `spec`.
     pub fn apply(&self, spec: &ThemeSpec) -> Result<(), AppError> {
-        let css = self.gen_mock.generate(spec)?;
+        // Material-palette branch: when the user has opted in AND
+        // we have both a palette provider and ≥3 cached wallpaper
+        // colours, derive a fresh `widget_colors` override block
+        // and feed it back through the normal CSS pipeline. All
+        // other theme knobs pass through untouched.
+        //
+        // If either prerequisite is missing (provider unwired,
+        // palette cache empty on first run), we quietly fall
+        // through to the non-MD path so the user's theme still
+        // applies — the UI's toggle hint is the place to surface
+        // "palette not ready yet".
+        let effective = if spec.material_palette.enabled {
+            if let Some(derived) = self.derive_material_spec(spec) {
+                derived
+            } else {
+                spec.clone()
+            }
+        } else {
+            spec.clone()
+        };
+
+        let css = self.gen_mock.generate(&effective)?;
         self.writer.write_gtk_css(&css.gtk_css, &css.gtk3_css)?;
         self.writer.write_shell_css(&css.shell_css, CUSTOM_THEME_NAME)?;
         self.appearance.set_shell_theme(CUSTOM_THEME_NAME).ok();
@@ -139,13 +175,33 @@ impl ApplyThemeUseCase {
         // GSettings + `.desktop` writes as part of the same Apply.
         // Failures here are logged but don't fail the whole apply —
         // the user's CSS theme is already on disk.
-        if let Err(e) = self.apply_scaling(&spec.scaling) {
+        if let Err(e) = self.apply_scaling(&effective.scaling) {
             tracing::warn!("apply_scaling failed: {e}");
         }
 
-        let external_spec = external_spec_from(spec);
+        let external_spec = external_spec_from(&effective);
         self.fan_out_apply(&external_spec);
         Ok(())
+    }
+
+    /// Clone `spec` and overwrite its `widget_colors` from the
+    /// Material derivation. Returns `None` if the palette provider
+    /// isn't wired or the wallpaper cache has fewer than three
+    /// colours yet — caller falls back to the user-supplied overrides.
+    fn derive_material_spec(&self, spec: &ThemeSpec) -> Option<ThemeSpec> {
+        let provider = self.palette.as_ref()?;
+        let palette = provider.top3()?;
+        let day = spec.material_palette.day_permutation.apply(&palette);
+        let night = spec.material_palette.night_permutation.apply(&palette);
+        let overrides = derive_md3_overrides(&day, &night, spec.tint.intensity);
+        let mut copy = spec.clone();
+        copy.widget_colors = overrides;
+        tracing::info!(
+            "material-palette applied (day={:?}, night={:?})",
+            spec.material_palette.day_permutation,
+            spec.material_palette.night_permutation,
+        );
+        Some(copy)
     }
 
     /// Apply just the scaling portion of a theme spec. Safe to call

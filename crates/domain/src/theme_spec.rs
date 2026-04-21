@@ -405,6 +405,11 @@ pub struct ThemeSpec {
     /// HiDPI / fractional-scaling / per-app override controls.
     /// Defaulted so untouched packs emit no GSettings writes.
     pub scaling: ScalingSpec,
+    /// Material-Design-3 wallpaper theming. Default is disabled so
+    /// the feature only activates when the user opts in; at that
+    /// point the use case overwrites `widget_colors` with a
+    /// derivation from the live wallpaper palette.
+    pub material_palette: crate::MaterialPaletteSpec,
 }
 
 impl ThemeSpec {
@@ -451,6 +456,7 @@ impl ThemeSpec {
             },
             overview_blur: true,
             scaling: ScalingSpec::default(),
+            material_palette: crate::MaterialPaletteSpec::default(),
         }
     }
 }
