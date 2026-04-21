@@ -63,6 +63,9 @@ pub enum WallpaperSlideshowError {
     /// contains `/` or control chars). The adapter uses it verbatim
     /// to build `<name>.xml`.
     InvalidName(String),
+    /// Time-of-day mode requires the four transition moments to be
+    /// strictly increasing (sunrise < day < sunset < night).
+    TimesNotIncreasing,
 }
 
 impl core::fmt::Display for WallpaperSlideshowError {
@@ -79,11 +82,70 @@ impl core::fmt::Display for WallpaperSlideshowError {
                 write!(f, "picture path must be absolute: {}", p.display())
             }
             Self::InvalidName(n) => write!(f, "invalid slideshow name: {n:?}"),
+            Self::TimesNotIncreasing => {
+                write!(f, "sunrise/day/sunset/night times must be strictly increasing")
+            }
         }
     }
 }
 
 impl std::error::Error for WallpaperSlideshowError {}
+
+/// A wall-clock time (hour:minute) within a 24-hour day. Used by
+/// [`SlideshowMode::TimeOfDay`] to pin each slot's transition moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeOfDay {
+    pub hour: u8,
+    pub minute: u8,
+}
+
+impl TimeOfDay {
+    /// Construct a validated `TimeOfDay`. `hour` must be 0–23 and
+    /// `minute` 0–59; otherwise clamps to the nearest legal value —
+    /// this lets the UI pass raw spin-row doubles without having to
+    /// guard every call-site.
+    pub fn new(hour: u8, minute: u8) -> Self {
+        Self {
+            hour: hour.min(23),
+            minute: minute.min(59),
+        }
+    }
+
+    /// Convert to seconds-since-midnight, useful when computing
+    /// slideshow durations.
+    pub fn seconds_since_midnight(&self) -> u32 {
+        (self.hour as u32) * 3600 + (self.minute as u32) * 60
+    }
+}
+
+/// Playback mode for a slideshow.
+///
+/// The XML format GNOME consumes is the same in both cases — a
+/// sequence of `<static>` entries with durations — but the meaning
+/// differs.
+///
+/// - `Interval` — hold each picture for `interval_seconds`, cycle
+///   forever. Order comes from `pictures()`.
+/// - `TimeOfDay` — four pictures pinned to sunrise / day / sunset /
+///   night wall-clock transitions. Cycle is exactly 24 hours; the
+///   XML `<starttime>` is midnight UTC today so the transitions fire
+///   at the user's declared local-time thresholds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlideshowMode {
+    Interval,
+    TimeOfDay {
+        /// Local time at which the sunrise wallpaper activates. The
+        /// slot holds until `day_at`.
+        sunrise_at: TimeOfDay,
+        /// Transition into the "day" wallpaper.
+        day_at: TimeOfDay,
+        /// Transition into the "sunset" wallpaper.
+        sunset_at: TimeOfDay,
+        /// Transition into the "night" wallpaper; holds until
+        /// sunrise-at rolls around the next morning.
+        night_at: TimeOfDay,
+    },
+}
 
 /// User-authored wallpaper rotation. Immutable after construction —
 /// mutate a fresh instance via [`WallpaperSlideshow::new`] to change
@@ -92,17 +154,23 @@ impl std::error::Error for WallpaperSlideshowError {}
 pub struct WallpaperSlideshow {
     /// Filesystem-safe stem. The adapter writes `<name>.xml`.
     name: String,
-    /// Absolute paths to pictures, in display order.
+    /// Absolute paths to pictures, in display order. For
+    /// [`SlideshowMode::TimeOfDay`] this is exactly four entries
+    /// in sunrise / day / sunset / night order.
     pictures: Vec<PathBuf>,
     /// Seconds to hold each picture before fading to the next.
+    /// Ignored by the XML renderer when mode is `TimeOfDay`.
     interval_seconds: u32,
     /// Cross-fade duration between adjacent pictures.
     transition_seconds: f64,
     /// When true, the adapter is expected to shuffle `pictures` in
     /// place before emitting XML. We keep the flag in the domain so
     /// the shuffle decision is persisted in pack manifests; the
-    /// adapter owns the RNG.
+    /// adapter owns the RNG. Only meaningful for `Interval` mode.
     shuffle: bool,
+    /// Playback mode. Defaults to `Interval` so every existing
+    /// caller (including `new`) stays source-compatible.
+    mode: SlideshowMode,
 }
 
 impl WallpaperSlideshow {
@@ -155,7 +223,56 @@ impl WallpaperSlideshow {
             interval_seconds,
             transition_seconds,
             shuffle,
+            mode: SlideshowMode::Interval,
         })
+    }
+
+    /// Construct a time-of-day slideshow. The four pictures activate
+    /// at the declared wall-clock moments and hold until the next.
+    ///
+    /// Transition times must be strictly increasing and all within a
+    /// single day (00:00–23:59). Pictures must all be absolute paths.
+    /// Like [`Self::new`], `transition_seconds` defaults to
+    /// [`DEFAULT_TRANSITION_SECONDS`] if left unspecified via this
+    /// constructor; TimeOfDay cycles use the default.
+    pub fn time_of_day(
+        name: impl Into<String>,
+        sunrise: (PathBuf, TimeOfDay),
+        day: (PathBuf, TimeOfDay),
+        sunset: (PathBuf, TimeOfDay),
+        night: (PathBuf, TimeOfDay),
+    ) -> Result<Self, WallpaperSlideshowError> {
+        let name = name.into();
+        validate_name(&name)?;
+        let pictures = vec![sunrise.0, day.0, sunset.0, night.0];
+        for p in &pictures {
+            if !p.is_absolute() {
+                return Err(WallpaperSlideshowError::RelativePath(p.clone()));
+            }
+        }
+        let slots = [sunrise.1, day.1, sunset.1, night.1];
+        for w in slots.windows(2) {
+            if w[1].seconds_since_midnight() <= w[0].seconds_since_midnight() {
+                return Err(WallpaperSlideshowError::TimesNotIncreasing);
+            }
+        }
+        Ok(Self {
+            name,
+            pictures,
+            interval_seconds: 0,
+            transition_seconds: DEFAULT_TRANSITION_SECONDS,
+            shuffle: false,
+            mode: SlideshowMode::TimeOfDay {
+                sunrise_at: sunrise.1,
+                day_at: day.1,
+                sunset_at: sunset.1,
+                night_at: night.1,
+            },
+        })
+    }
+
+    pub fn mode(&self) -> &SlideshowMode {
+        &self.mode
     }
 
     pub fn name(&self) -> &str {
@@ -386,6 +503,61 @@ mod tests {
         let c = FixedClock(StartTime::EPOCH);
         assert_eq!(c.now(), StartTime::EPOCH);
         assert_eq!(c.now(), c.now());
+    }
+
+    #[test]
+    fn time_of_day_constructor_builds_four_slots() {
+        let s = WallpaperSlideshow::time_of_day(
+            "daily",
+            (PathBuf::from("/img/sunrise.jpg"), TimeOfDay::new(6, 0)),
+            (PathBuf::from("/img/day.jpg"), TimeOfDay::new(9, 0)),
+            (PathBuf::from("/img/sunset.jpg"), TimeOfDay::new(18, 0)),
+            (PathBuf::from("/img/night.jpg"), TimeOfDay::new(21, 0)),
+        )
+        .unwrap();
+        assert_eq!(s.pictures().len(), 4);
+        assert!(matches!(s.mode(), SlideshowMode::TimeOfDay { .. }));
+    }
+
+    #[test]
+    fn time_of_day_requires_increasing_transitions() {
+        let err = WallpaperSlideshow::time_of_day(
+            "bad",
+            (PathBuf::from("/a.jpg"), TimeOfDay::new(9, 0)),
+            // day_at earlier than sunrise_at:
+            (PathBuf::from("/b.jpg"), TimeOfDay::new(6, 0)),
+            (PathBuf::from("/c.jpg"), TimeOfDay::new(18, 0)),
+            (PathBuf::from("/d.jpg"), TimeOfDay::new(21, 0)),
+        )
+        .unwrap_err();
+        assert_eq!(err, WallpaperSlideshowError::TimesNotIncreasing);
+    }
+
+    #[test]
+    fn time_of_day_rejects_relative_paths() {
+        let err = WallpaperSlideshow::time_of_day(
+            "rel",
+            (PathBuf::from("relative.jpg"), TimeOfDay::new(6, 0)),
+            (PathBuf::from("/d.jpg"), TimeOfDay::new(9, 0)),
+            (PathBuf::from("/s.jpg"), TimeOfDay::new(18, 0)),
+            (PathBuf::from("/n.jpg"), TimeOfDay::new(21, 0)),
+        )
+        .unwrap_err();
+        assert!(matches!(err, WallpaperSlideshowError::RelativePath(_)));
+    }
+
+    #[test]
+    fn time_of_day_seconds_since_midnight_math() {
+        assert_eq!(TimeOfDay::new(0, 0).seconds_since_midnight(), 0);
+        assert_eq!(TimeOfDay::new(6, 30).seconds_since_midnight(), 6 * 3600 + 1800);
+        assert_eq!(TimeOfDay::new(23, 59).seconds_since_midnight(), 86_340);
+    }
+
+    #[test]
+    fn time_of_day_out_of_range_clamps() {
+        // Defensive: UI may forward raw spin-row values.
+        assert_eq!(TimeOfDay::new(25, 70).hour, 23);
+        assert_eq!(TimeOfDay::new(25, 70).minute, 59);
     }
 
     #[test]

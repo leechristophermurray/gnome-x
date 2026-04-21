@@ -74,6 +74,74 @@ pub fn color_distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> u32 {
     dr * dr + dg * dg + db * db
 }
 
+// ---------------- CIELAB / perceptual colour distance ----------------
+//
+// The palette extractor uses LAB because sRGB-Euclidean distance is
+// perceptually uneven: colours that look close can be numerically far
+// (and vice-versa). LAB's `delta-E` (CIE76) is a better stand-in for
+// "how similar do these two colours *look*", which is what we want
+// when snapping a wallpaper swatch to GNOME's 9-accent palette.
+
+/// Convert a gamma-encoded sRGB byte to a linear-light [0, 1] float.
+fn srgb_to_linear(c: u8) -> f32 {
+    let v = c as f32 / 255.0;
+    if v <= 0.040_45 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Convert sRGB → CIE XYZ (D65 illuminant). sRGB matrix values from
+/// IEC 61966-2-1.
+fn rgb_to_xyz(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let r = srgb_to_linear(r);
+    let g = srgb_to_linear(g);
+    let b = srgb_to_linear(b);
+    let x = 0.412_390_8 * r + 0.357_584_3 * g + 0.180_480_7 * b;
+    let y = 0.212_639_0 * r + 0.715_168_7 * g + 0.072_192_3 * b;
+    let z = 0.019_330_8 * r + 0.119_194_8 * g + 0.950_532_1 * b;
+    (x, y, z)
+}
+
+/// f() mapping used by CIE L*a*b*. Kept private; callers use
+/// [`rgb_to_lab`] directly.
+fn lab_f(t: f32) -> f32 {
+    const DELTA: f32 = 6.0 / 29.0;
+    if t > DELTA.powi(3) {
+        t.cbrt()
+    } else {
+        t / (3.0 * DELTA * DELTA) + 4.0 / 29.0
+    }
+}
+
+/// Convert sRGB to CIELAB under a D65 white point. Returns
+/// `(L, a, b)` where L ∈ [0, 100] and a/b ∈ roughly [-128, 127].
+pub fn rgb_to_lab(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    // D65 reference white, normalised with Yn = 1.0.
+    const XN: f32 = 0.950_47;
+    const YN: f32 = 1.000_00;
+    const ZN: f32 = 1.088_83;
+    let (x, y, z) = rgb_to_xyz(r, g, b);
+    let fx = lab_f(x / XN);
+    let fy = lab_f(y / YN);
+    let fz = lab_f(z / ZN);
+    let l = 116.0 * fy - 16.0;
+    let a = 500.0 * (fx - fy);
+    let bv = 200.0 * (fy - fz);
+    (l, a, bv)
+}
+
+/// CIE76 ΔE — straight Euclidean distance in L*a*b*. Not the most
+/// modern colour-difference metric (that's ΔE2000), but 20× cheaper
+/// and "correct enough" for picking between 9 well-spaced accents.
+pub fn lab_distance(a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
+    let dl = a.0 - b.0;
+    let da = a.1 - b.1;
+    let db = a.2 - b.2;
+    (dl * dl + da * da + db * db).sqrt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

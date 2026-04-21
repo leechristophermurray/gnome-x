@@ -246,16 +246,16 @@ fn setup_wallpaper_watcher() {
             });
     }
 
-    // --- slideshow-interval change: rebuild the tick so cycles line
-    //     up with the fresh interval. ---
-    {
+    // --- slideshow-interval / mode change: rebuild the tick so
+    //     cycles line up with fresh settings. ---
+    for key in ["wallpaper-slideshow-interval", "wallpaper-slideshow-mode"] {
         let bg = bg_settings.clone();
         let app = app_settings.clone();
         let slideshow_tick = slideshow_tick.clone();
         let reapply = reapply.clone();
         app_settings
             .clone()
-            .connect_changed(Some("wallpaper-slideshow-interval"), move |_, _| {
+            .connect_changed(Some(key), move |_, _| {
                 let uri = bg.string("picture-uri").to_string();
                 reinstall_slideshow_tick(&uri, &app, &slideshow_tick, reapply.clone());
             });
@@ -327,12 +327,19 @@ fn reinstall_slideshow_tick(
         return;
     }
 
-    // Clamp to a safe minimum. GNOME's shortest stock slideshow is 1 s
-    // but we don't need to re-extract colours at that cadence; we re-
-    // sample at the configured hold time, which is the human-meaningful
-    // unit users actually see on screen.
-    let interval = app.uint("wallpaper-slideshow-interval").max(30);
-    tracing::info!("slideshow tick installed: every {interval}s");
+    // Tick period: in interval mode, the user's slideshow interval
+    // (floored to 30 s so we can't wedge in a busy loop). In TOD
+    // mode, pull every 10 minutes — the configured transition
+    // cadence may be anywhere in a 24-hour day, so we poll more
+    // finely and the extractor cheaply no-ops when the current
+    // picture hasn't changed.
+    let mode = app.string("wallpaper-slideshow-mode");
+    let interval = if mode.as_str() == "tod" {
+        600
+    } else {
+        app.uint("wallpaper-slideshow-interval").max(30)
+    };
+    tracing::info!("slideshow tick installed: every {interval}s ({mode} mode)");
 
     let id = glib::timeout_add_seconds_local(interval, move || {
         reapply("slideshow tick");
