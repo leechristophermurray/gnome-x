@@ -1,9 +1,12 @@
 // Copyright 2026 GNOME X Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::ports::{AppearanceSettings, ExternalAppThemer, ThemeCssGenerator, ThemeWriter};
+use crate::ports::{
+    AppLauncherOverrides, AppearanceSettings, ExternalAppThemer, MutterSettings,
+    ThemeCssGenerator, ThemeWriter,
+};
 use crate::AppError;
-use gnomex_domain::{ExternalThemeSpec, ThemeSpec};
+use gnomex_domain::{ExternalThemeSpec, ScalingSpec, ThemeSpec};
 use std::sync::Arc;
 
 const CUSTOM_THEME_NAME: &str = "GNOME-X-Custom";
@@ -19,6 +22,13 @@ pub struct ApplyThemeUseCase {
     writer: Arc<dyn ThemeWriter>,
     appearance: Arc<dyn AppearanceSettings>,
     external_themers: Vec<Arc<dyn ExternalAppThemer>>,
+    /// Optional Mutter/text-scale adapter. Absent when the use case is
+    /// exercised from a headless unit test with mocks only; present in
+    /// production. When absent, `apply_scaling` is a no-op.
+    mutter: Option<Arc<dyn MutterSettings>>,
+    /// Optional per-app `.desktop` override adapter. Same treatment as
+    /// `mutter` above.
+    app_launcher: Option<Arc<dyn AppLauncherOverrides>>,
 }
 
 impl ApplyThemeUseCase {
@@ -32,6 +42,8 @@ impl ApplyThemeUseCase {
             writer,
             appearance,
             external_themers: Vec::new(),
+            mutter: None,
+            app_launcher: None,
         }
     }
 
@@ -39,6 +51,24 @@ impl ApplyThemeUseCase {
     /// (one per app family). Order is preserved for logging purposes.
     pub fn with_external_themer(mut self, themer: Arc<dyn ExternalAppThemer>) -> Self {
         self.external_themers.push(themer);
+        self
+    }
+
+    /// Register the Mutter/text-scaling adapter. Without it,
+    /// [`apply_scaling`] is a no-op so the `ApplyThemeUseCase` can
+    /// still run in tests that don't exercise scaling.
+    pub fn with_mutter_settings(mut self, mutter: Arc<dyn MutterSettings>) -> Self {
+        self.mutter = Some(mutter);
+        self
+    }
+
+    /// Register the per-app `.desktop` override adapter. Without it,
+    /// [`apply_scaling`] skips per-app overrides (logs a debug line).
+    pub fn with_app_launcher_overrides(
+        mut self,
+        launcher: Arc<dyn AppLauncherOverrides>,
+    ) -> Self {
+        self.app_launcher = Some(launcher);
         self
     }
 
@@ -50,8 +80,56 @@ impl ApplyThemeUseCase {
         self.writer.write_shell_css(&css.shell_css, CUSTOM_THEME_NAME)?;
         self.appearance.set_shell_theme(CUSTOM_THEME_NAME).ok();
 
+        // Scaling adjacent to theming: a `ThemeSpec` carrying a
+        // non-default `ScalingSpec` should produce the expected
+        // GSettings + `.desktop` writes as part of the same Apply.
+        // Failures here are logged but don't fail the whole apply —
+        // the user's CSS theme is already on disk.
+        if let Err(e) = self.apply_scaling(&spec.scaling) {
+            tracing::warn!("apply_scaling failed: {e}");
+        }
+
         let external_spec = external_spec_from(spec);
         self.fan_out_apply(&external_spec);
+        Ok(())
+    }
+
+    /// Apply just the scaling portion of a theme spec. Safe to call
+    /// when `mutter` / `app_launcher` ports are absent — it becomes a
+    /// no-op rather than an error, so headless unit tests can
+    /// continue to run.
+    ///
+    /// Semantics:
+    /// - `text_scaling` is written only if non-default (1.0).
+    /// - `experimental-features` is written only if the reconciled
+    ///   list differs from what's currently set.
+    /// - Each `per_app_overrides` entry is registered (writes a
+    ///   `.desktop` file). Per-app failures are logged and skipped
+    ///   rather than aborting the batch.
+    pub fn apply_scaling(&self, scaling: &ScalingSpec) -> Result<(), AppError> {
+        if let Some(m) = &self.mutter {
+            if !scaling.text_scaling.is_default() {
+                m.set_text_scaling_factor(scaling.text_scaling.as_f64())?;
+            }
+            let current = m.experimental_features()?;
+            if let Some(new) = crate::use_cases::apply_theme::reconcile_flags(
+                &current,
+                scaling.scale_monitor_framebuffer,
+                scaling.x11_randr_fractional_scaling,
+            ) {
+                m.set_experimental_features(&new)?;
+            }
+        }
+        if let Some(launcher) = &self.app_launcher {
+            for o in &scaling.per_app_overrides {
+                if let Err(e) = launcher.register_override(o) {
+                    tracing::warn!(
+                        "per-app scaling override for '{}' failed: {e}",
+                        o.app_id
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -212,6 +290,51 @@ mod tests {
         let ext = external_spec_from(&spec);
         assert!(!ext.color_scheme.is_dark());
     }
+}
+
+/// Pure reconcile: produce the new `experimental-features` strv for
+/// Mutter, flipping our two managed flags while preserving any other
+/// flag the user set. Returns `None` when the result is identical to
+/// `current` so callers can skip a no-op write.
+///
+/// Lives in the app layer (not infra) because it's pure logic — no
+/// GSettings dependency — which keeps it trivially unit-testable.
+pub fn reconcile_flags(
+    current: &[String],
+    want_monitor_framebuffer: bool,
+    want_x11_fractional: bool,
+) -> Option<Vec<String>> {
+    const FB: &str = "scale-monitor-framebuffer";
+    const X11: &str = "x11-randr-fractional-scaling";
+
+    let mut out: Vec<String> = Vec::with_capacity(current.len() + 2);
+    let mut have_fb = false;
+    let mut have_x11 = false;
+
+    for flag in current {
+        match flag.as_str() {
+            FB => {
+                if want_monitor_framebuffer && !have_fb {
+                    out.push(FB.to_owned());
+                    have_fb = true;
+                }
+            }
+            X11 => {
+                if want_x11_fractional && !have_x11 {
+                    out.push(X11.to_owned());
+                    have_x11 = true;
+                }
+            }
+            _ => out.push(flag.clone()),
+        }
+    }
+    if want_monitor_framebuffer && !have_fb {
+        out.push(FB.to_owned());
+    }
+    if want_x11_fractional && !have_x11 {
+        out.push(X11.to_owned());
+    }
+    if out == current { None } else { Some(out) }
 }
 
 fn external_spec_from(spec: &ThemeSpec) -> ExternalThemeSpec {

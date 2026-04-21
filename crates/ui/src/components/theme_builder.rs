@@ -11,8 +11,9 @@ use adw::prelude::*;
 use gnomex_app::use_cases::ApplyThemeUseCase;
 use gnomex_domain::theme_capability::{self, ThemeControlId};
 use gnomex_domain::{
-    DashSpec, HexColor, LayerSeparationSpec, Opacity, PanelSpec, Radius, SidebarSpec, ThemeSpec,
-    TintSpec, WidgetColorOverrides, WidgetStyleSpec,
+    DashSpec, HexColor, LayerSeparationSpec, Opacity, PanelSpec, PerAppScaleOverride, Radius,
+    ScaleFactor, ScalingSpec, SidebarSpec, TextScaling, ThemeSpec, TintSpec, WidgetColorOverrides,
+    WidgetStyleSpec,
 };
 use relm4::prelude::*;
 use std::collections::HashMap;
@@ -81,6 +82,15 @@ pub struct ThemeBuilderModel {
     // Notification
     notification_radius: f64,
     notification_opacity: f64,
+    // Scaling — GXF-050/051/053
+    scaling_text_factor: f64,
+    scaling_monitor_framebuffer: bool,
+    scaling_x11_fractional: bool,
+    /// Parsed per-app overrides as `(app_id, scale)` pairs. Persisted
+    /// into the `tb-scaling-per-app-overrides` strv on Apply.
+    scaling_per_app: Vec<(String, f64)>,
+    /// Live-updating list widget so we can refresh after add/remove.
+    scaling_per_app_list: gtk::ListBox,
     // Scheduled accent
     scheduled_accent_enabled: bool,
     day_accent: String,
@@ -195,6 +205,12 @@ pub enum ThemeBuilderMsg {
     SetFont(String),
     SetMonoFont(String),
     SetTextScale(f64),
+    // Scaling — GXF-050/051/053
+    SetScalingTextFactor(f64),
+    SetScalingMonitorFramebuffer(bool),
+    SetScalingX11Fractional(bool),
+    AddPerAppOverride { app_id: String, scale: f64 },
+    RemovePerAppOverride(String),
     SetFontHinting(String),
     SetCursorSize(i32),
     SetAnimations(bool),
@@ -978,6 +994,150 @@ impl SimpleComponent for ThemeBuilderModel {
         }
         cursor_group.add(&cursor_size_row);
         // appended in final ordering
+
+        // === Scaling — GXF-050 / GXF-051 / GXF-053 ===
+        // Placed on the Typography page because:
+        //   - Text scaling already belongs in Typography (and we're
+        //     giving it its own knob distinct from global DPI scale,
+        //     per issue #23 "text vs desktop scaling decoupling").
+        //   - Fractional scaling flags are an adjacent HiDPI concern
+        //     — same mental model, same page.
+        //   - Per-app scale overrides are niche enough that a full
+        //     page of their own would be premature; a single row
+        //     with add/remove is sufficient for v1 (issue #21).
+        let scaling_group = adw::PreferencesGroup::builder()
+            .title("Scaling (HiDPI)")
+            .description(
+                "Text scale (decoupled from desktop scale), Mutter \
+                 fractional-scaling experimental flags, and per-app \
+                 .desktop override overrides for launching individual \
+                 apps at a specific scale factor.",
+            )
+            .build();
+
+        // Text scaling factor — a GSettings clone but exposed as an
+        // independent row so users can dial text size without
+        // touching their monitor scale (issue #23).
+        let initial_text_factor = app_settings.double("tb-scaling-text-factor");
+        let text_scale_row = build_spin_row(
+            "Text Scaling Factor",
+            "Scales UI text independently of the global desktop scale \
+             (0.5\u{2013}3.0, 1.0 = default).",
+            0.5,
+            3.0,
+            initial_text_factor,
+            0.05,
+        );
+        {
+            let sender = sender.clone();
+            text_scale_row.connect_value_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetScalingTextFactor(row.value()));
+            });
+        }
+        scaling_group.add(&text_scale_row);
+
+        let fb_switch = adw::SwitchRow::builder()
+            .title("Mutter: scale-monitor-framebuffer")
+            .subtitle(
+                "Wayland fractional scaling (crisp at 125/150/175%). \
+                 Requires Mutter 43+. Session logout/login needed for \
+                 the flag to take effect.",
+            )
+            .active(app_settings.boolean("tb-scaling-monitor-framebuffer"))
+            .build();
+        {
+            let sender = sender.clone();
+            fb_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetScalingMonitorFramebuffer(
+                    row.is_active(),
+                ));
+            });
+        }
+        scaling_group.add(&fb_switch);
+
+        let x11_switch = adw::SwitchRow::builder()
+            .title("Mutter: x11-randr-fractional-scaling")
+            .subtitle(
+                "X11-session counterpart. Enables fractional scales \
+                 under X11 sessions where Wayland framebuffer scaling \
+                 isn't available.",
+            )
+            .active(app_settings.boolean("tb-scaling-x11-fractional"))
+            .build();
+        {
+            let sender = sender.clone();
+            x11_switch.connect_active_notify(move |row| {
+                sender.input(ThemeBuilderMsg::SetScalingX11Fractional(row.is_active()));
+            });
+        }
+        scaling_group.add(&x11_switch);
+
+        // --- Per-app overrides ---
+        // The v1 UX is intentionally narrow (see skill hint in the
+        // prompt): an entry row + scale dropdown + Register button,
+        // then a list of currently-registered overrides with Remove
+        // buttons. A richer picker can land in a follow-up PR.
+        let per_app_header = adw::ActionRow::builder()
+            .title("Per-App Scale Overrides")
+            .subtitle(
+                "Register a scale factor for a specific .desktop app. \
+                 Writes a user-level override to ~/.local/share/applications/",
+            )
+            .build();
+        scaling_group.add(&per_app_header);
+
+        let per_app_entry = gtk::Entry::builder()
+            .placeholder_text("org.gnome.Nautilus")
+            .hexpand(true)
+            .build();
+        let per_app_scale_dd = gtk::DropDown::builder()
+            .model(&gtk::StringList::new(&[
+                "0.5", "1.0", "1.25", "1.5", "1.75", "2.0",
+            ]))
+            .selected(1)
+            .build();
+        let per_app_add = gtk::Button::builder()
+            .label("Register")
+            .css_classes(["suggested-action"])
+            .build();
+        {
+            let sender = sender.clone();
+            let entry = per_app_entry.clone();
+            let dd = per_app_scale_dd.clone();
+            per_app_add.connect_clicked(move |_| {
+                let app_id = entry.text().trim().to_owned();
+                if app_id.is_empty() {
+                    return;
+                }
+                let idx = dd.selected();
+                let scale = [0.5, 1.0, 1.25, 1.5, 1.75, 2.0]
+                    .get(idx as usize)
+                    .copied()
+                    .unwrap_or(1.0);
+                sender.input(ThemeBuilderMsg::AddPerAppOverride { app_id, scale });
+                entry.set_text("");
+            });
+        }
+        let per_app_controls = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .margin_top(6)
+            .margin_bottom(6)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        per_app_controls.append(&per_app_entry);
+        per_app_controls.append(&per_app_scale_dd);
+        per_app_controls.append(&per_app_add);
+        scaling_group.add(&per_app_controls);
+
+        let per_app_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["boxed-list"])
+            .build();
+        scaling_group.add(&per_app_list);
+
+        // === End Scaling group ===
 
         // === Desktop Behavior ===
         let behavior_group = adw::PreferencesGroup::builder()
@@ -1837,7 +1997,7 @@ impl SimpleComponent for ThemeBuilderModel {
             &[&radii_group, &csd_group, &inset_group, &sidebar_group, &layer_group, &widget_style_group, &widget_colors_group, &window_group, &wm_group],
         );
         let typography_page = build_category_page(
-            &[&font_group, &cursor_group],
+            &[&font_group, &cursor_group, &scaling_group],
         );
         let behavior_page = build_category_page(
             &[&behavior_group, &nl_group],
@@ -1999,6 +2159,11 @@ impl SimpleComponent for ThemeBuilderModel {
             color_sidebar_bg_dark: app_settings.string("tb-color-sidebar-bg-dark").into(),
             notification_radius: app_settings.double("tb-notification-radius"),
             notification_opacity: app_settings.double("tb-notification-opacity"),
+            scaling_text_factor: app_settings.double("tb-scaling-text-factor"),
+            scaling_monitor_framebuffer: app_settings.boolean("tb-scaling-monitor-framebuffer"),
+            scaling_x11_fractional: app_settings.boolean("tb-scaling-x11-fractional"),
+            scaling_per_app: load_per_app_overrides(&app_settings),
+            scaling_per_app_list: per_app_list.clone(),
             scheduled_accent_enabled: saved_sched_enabled,
             day_accent: initial_day,
             night_accent: initial_night,
@@ -2518,6 +2683,46 @@ impl SimpleComponent for ThemeBuilderModel {
                 let _ = iface.set_double("text-scaling-factor", scale);
                 tracing::info!("text scale set to: {scale}");
             }
+            // --- Scaling (GXF-050/051/053) ---
+            ThemeBuilderMsg::SetScalingTextFactor(v) => {
+                self.scaling_text_factor = v;
+                // Persist eagerly so pack snapshots pick it up even
+                // without a full Apply, matching the pattern used for
+                // `overview_blur` / `shared-tinting-enabled`.
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_double("tb-scaling-text-factor", v);
+            }
+            ThemeBuilderMsg::SetScalingMonitorFramebuffer(enabled) => {
+                self.scaling_monitor_framebuffer = enabled;
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_boolean("tb-scaling-monitor-framebuffer", enabled);
+            }
+            ThemeBuilderMsg::SetScalingX11Fractional(enabled) => {
+                self.scaling_x11_fractional = enabled;
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_boolean("tb-scaling-x11-fractional", enabled);
+            }
+            ThemeBuilderMsg::AddPerAppOverride { app_id, scale } => {
+                // Replace any existing entry for this id rather than
+                // accumulating duplicates.
+                self.scaling_per_app.retain(|(id, _)| id != &app_id);
+                self.scaling_per_app.push((app_id, scale));
+                persist_per_app_overrides(&self.scaling_per_app);
+                refresh_per_app_listbox(
+                    &self.scaling_per_app_list,
+                    &self.scaling_per_app,
+                    &sender,
+                );
+            }
+            ThemeBuilderMsg::RemovePerAppOverride(app_id) => {
+                self.scaling_per_app.retain(|(id, _)| id != &app_id);
+                persist_per_app_overrides(&self.scaling_per_app);
+                refresh_per_app_listbox(
+                    &self.scaling_per_app_list,
+                    &self.scaling_per_app,
+                    &sender,
+                );
+            }
             ThemeBuilderMsg::SetFontHinting(hinting) => {
                 let iface = gio::Settings::new("org.gnome.desktop.interface");
                 let _ = iface.set_string("font-hinting", &hinting);
@@ -2635,6 +2840,23 @@ impl SimpleComponent for ThemeBuilderModel {
                 }
             }
             ThemeBuilderMsg::Reset => {
+                // Scaling knobs reset alongside the rest — if the
+                // user hits Reset, they expect "make it look like it
+                // did before I touched anything", including scaling.
+                self.scaling_text_factor = 1.0;
+                self.scaling_monitor_framebuffer = false;
+                self.scaling_x11_fractional = false;
+                self.scaling_per_app.clear();
+                persist_per_app_overrides(&self.scaling_per_app);
+                let app = gio::Settings::new("io.github.gnomex.GnomeX");
+                let _ = app.set_double("tb-scaling-text-factor", 1.0);
+                let _ = app.set_boolean("tb-scaling-monitor-framebuffer", false);
+                let _ = app.set_boolean("tb-scaling-x11-fractional", false);
+                refresh_per_app_listbox(
+                    &self.scaling_per_app_list,
+                    &self.scaling_per_app,
+                    &sender,
+                );
                 self.window_radius = 12.0;
                 self.element_radius = 6.0;
                 self.panel_radius = 0.0;
@@ -2741,6 +2963,22 @@ impl ThemeBuilderModel {
                 opacity: Opacity::from_fraction(self.notification_opacity)?,
             },
             overview_blur: self.overview_blur,
+            scaling: ScalingSpec {
+                text_scaling: TextScaling::new(self.scaling_text_factor)?,
+                scale_monitor_framebuffer: self.scaling_monitor_framebuffer,
+                x11_randr_fractional_scaling: self.scaling_x11_fractional,
+                per_app_overrides: self
+                    .scaling_per_app
+                    .iter()
+                    .filter_map(|(id, scale)| {
+                        let scale = ScaleFactor::new(*scale).ok()?;
+                        Some(PerAppScaleOverride {
+                            app_id: id.clone(),
+                            scale,
+                        })
+                    })
+                    .collect(),
+            },
         })
     }
 }
@@ -2873,6 +3111,83 @@ fn load_cached_palette(settings: &gio::Settings) -> Vec<(String, String)> {
             Some((hex.to_owned(), accent.to_owned()))
         })
         .collect()
+}
+
+/// Parse the `tb-scaling-per-app-overrides` strv into `(app_id,
+/// scale)` pairs. Malformed entries are silently dropped — the dconf
+/// key is write-open, so we can't assume well-formed input.
+fn load_per_app_overrides(settings: &gio::Settings) -> Vec<(String, f64)> {
+    let has_key = settings
+        .settings_schema()
+        .map(|s| s.has_key("tb-scaling-per-app-overrides"))
+        .unwrap_or(false);
+    if !has_key {
+        return Vec::new();
+    }
+    settings
+        .strv("tb-scaling-per-app-overrides")
+        .iter()
+        .filter_map(|g| {
+            let s = g.as_str();
+            let (id, scale) = s.split_once(':')?;
+            let f: f64 = scale.trim().parse().ok()?;
+            Some((id.trim().to_owned(), f))
+        })
+        .collect()
+}
+
+/// Serialise the in-memory list back to the GSetting strv.
+fn persist_per_app_overrides(overrides: &[(String, f64)]) {
+    let app = gio::Settings::new("io.github.gnomex.GnomeX");
+    let encoded: Vec<String> = overrides
+        .iter()
+        .map(|(id, s)| format!("{id}:{s:.2}"))
+        .collect();
+    let as_strs: Vec<&str> = encoded.iter().map(|s| s.as_str()).collect();
+    let _ = app.set_strv("tb-scaling-per-app-overrides", as_strs);
+}
+
+/// Rebuild the per-app list widget in place — we clear and repopulate
+/// rather than diff because the list is always small (user-registered
+/// overrides, not a directory listing) and the code stays simpler.
+fn refresh_per_app_listbox(
+    list: &gtk::ListBox,
+    overrides: &[(String, f64)],
+    sender: &relm4::ComponentSender<ThemeBuilderModel>,
+) {
+    while let Some(row) = list.first_child() {
+        list.remove(&row);
+    }
+    if overrides.is_empty() {
+        let placeholder = adw::ActionRow::builder()
+            .title("(no overrides)")
+            .subtitle("Use the Register button above to add one.")
+            .css_classes(["dim-label"])
+            .build();
+        list.append(&placeholder);
+        return;
+    }
+    for (id, scale) in overrides {
+        let row = adw::ActionRow::builder()
+            .title(id)
+            .subtitle(&format!("scale = {scale:.2}"))
+            .build();
+        let remove = gtk::Button::builder()
+            .icon_name("user-trash-symbolic")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .tooltip_text("Remove override")
+            .build();
+        {
+            let sender = sender.clone();
+            let app_id = id.clone();
+            remove.connect_clicked(move |_| {
+                sender.input(ThemeBuilderMsg::RemovePerAppOverride(app_id.clone()));
+            });
+        }
+        row.add_suffix(&remove);
+        list.append(&row);
+    }
 }
 
 fn closest_accent(r: u8, g: u8, b: u8) -> String {

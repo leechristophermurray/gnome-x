@@ -43,6 +43,11 @@ const PACK_KEYS: &[&str] = &[
     "tb-show-window-shadow",
     "tb-combo-inset",
     "tb-floating-dock-enabled",
+    // Theme Builder — scaling (GXF-050/051/053)
+    "tb-scaling-text-factor",
+    "tb-scaling-monitor-framebuffer",
+    "tb-scaling-x11-fractional",
+    "tb-scaling-per-app-overrides",
     // Accent scheduling
     "scheduled-accent-enabled",
     "day-accent-color",

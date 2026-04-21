@@ -215,6 +215,26 @@
       <summary>Floating dock</summary>
       <description>Turn the overview dash into an always-visible floating dock (requires the Dash to Dock extension)</description>
     </key>
+    <key name="tb-scaling-text-factor" type="d">
+      <default>1.0</default>
+      <summary>Text scaling factor (GXF-053)</summary>
+      <description>Mirrors org.gnome.desktop.interface text-scaling-factor. 1.0 = Adwaita default. Stored on the GNOME X schema so it round-trips through Experience Packs; the infra layer writes the real GSetting on Apply.</description>
+    </key>
+    <key name="tb-scaling-monitor-framebuffer" type="b">
+      <default>false</default>
+      <summary>Fractional scaling: scale-monitor-framebuffer (GXF-050)</summary>
+      <description>When true, GNOME X will add scale-monitor-framebuffer to org.gnome.mutter experimental-features. Required on Wayland for crisp fractional scaling.</description>
+    </key>
+    <key name="tb-scaling-x11-fractional" type="b">
+      <default>false</default>
+      <summary>Fractional scaling: x11-randr-fractional-scaling (GXF-050)</summary>
+      <description>When true, GNOME X will add x11-randr-fractional-scaling to org.gnome.mutter experimental-features. X11 counterpart of scale-monitor-framebuffer.</description>
+    </key>
+    <key name="tb-scaling-per-app-overrides" type="as">
+      <default>[]</default>
+      <summary>Per-app scale overrides (GXF-051)</summary>
+      <description>Each entry is "APP_ID:SCALE" — e.g. "org.gnome.Nautilus:1.25". Applied on theme Apply by writing a modified ~/.local/share/applications/APP_ID.desktop. Allowed scales: 0.5, 1.0, 1.25, 1.5, 1.75, 2.0.</description>
+    </key>
     <key name="cached-wallpaper-palette" type="as">
       <default>[]</default>
       <summary>Cached wallpaper palette</summary>

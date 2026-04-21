@@ -16,9 +16,10 @@ use gnomex_app::use_cases::{
     PacksUseCase,
 };
 use gnomex_infra::{
-    ChromiumThemer, DbusShellProxy, EgoClient, FilesystemInstaller, FilesystemThemeWriter,
-    GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell, GSettingsFloatingDock,
-    GioThemingConflictDetector, OcsClient, PackTomlStorage, VscodeThemer, WmctrlDecorationProbe,
+    ChromiumThemer, DbusShellProxy, DesktopAppLauncherOverrides, EgoClient, FilesystemInstaller,
+    FilesystemThemeWriter, GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell,
+    GSettingsFloatingDock, GSettingsMutter, GioThemingConflictDetector, OcsClient,
+    PackTomlStorage, VscodeThemer, WmctrlDecorationProbe,
 };
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -131,7 +132,9 @@ impl AppServices {
         let apply_theme = Arc::new(
             ApplyThemeUseCase::new(css_generator, theme_writer, appearance)
                 .with_external_themer(Arc::new(VscodeThemer::new()))
-                .with_external_themer(Arc::new(ChromiumThemer::new())),
+                .with_external_themer(Arc::new(ChromiumThemer::new()))
+                .with_mutter_settings(Arc::new(GSettingsMutter::new()))
+                .with_app_launcher_overrides(Arc::new(DesktopAppLauncherOverrides::new())),
         );
 
         let conflict_detector: Arc<dyn ThemingConflictDetector> =
