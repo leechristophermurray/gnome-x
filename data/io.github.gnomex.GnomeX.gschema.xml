@@ -245,5 +245,25 @@
       <summary>Cached wallpaper palette</summary>
       <description>Each entry is "HEX:ACCENT_ID". The experienced daemon rewrites this whenever the wallpaper changes, so the UI can show last-known swatches without re-running extraction. Independent of use-wallpaper-accent — that gates whether we also set the accent color automatically.</description>
     </key>
+    <key name="wallpaper-slideshow-name" type="s">
+      <default>'gnome-x-slideshow'</default>
+      <summary>Last-configured wallpaper slideshow name (GXF-072)</summary>
+      <description>Filesystem stem for the GNOME background XML the slideshow view writes. Defaults to "gnome-x-slideshow" so round-trips through Apply always land on the same file.</description>
+    </key>
+    <key name="wallpaper-slideshow-pictures" type="as">
+      <default>[]</default>
+      <summary>Pictures in the last-configured slideshow (GXF-072)</summary>
+      <description>Ordered list of absolute picture paths. Persisted so the UI can re-open the slideshow view and show the last configuration.</description>
+    </key>
+    <key name="wallpaper-slideshow-interval" type="u">
+      <default>600</default>
+      <summary>Wallpaper slideshow interval seconds (GXF-072)</summary>
+      <description>Hold time (seconds) per picture. Minimum 5. Default is 10 minutes.</description>
+    </key>
+    <key name="wallpaper-slideshow-shuffle" type="b">
+      <default>false</default>
+      <summary>Wallpaper slideshow shuffle (GXF-072)</summary>
+      <description>When true, the slideshow view randomises picture order before writing the XML.</description>
+    </key>
   </schema>
 </schemalist>

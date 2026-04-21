@@ -20,6 +20,7 @@ mod theme;
 pub mod theme_capability;
 mod theme_spec;
 mod theming_conflict;
+mod wallpaper_slideshow;
 
 pub use decoration_report::*;
 pub use error::*;
@@ -33,3 +34,4 @@ pub use shell_version::*;
 pub use theme::*;
 pub use theme_spec::*;
 pub use theming_conflict::*;
+pub use wallpaper_slideshow::*;

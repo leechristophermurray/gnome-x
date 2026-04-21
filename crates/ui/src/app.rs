@@ -11,6 +11,9 @@ use crate::components::packs::{PacksModel, PacksOutput};
 use crate::components::settings::SettingsModel;
 use crate::components::shell_tweaks::ShellTweaksModel;
 use crate::components::theme_builder::{ThemeBuilderModel, ThemeBuilderOutput};
+use crate::components::wallpaper_slideshow::{
+    WallpaperSlideshowModel, WallpaperSlideshowOutput,
+};
 use crate::services::AppServices;
 use adw::prelude::*;
 use relm4::prelude::*;
@@ -30,6 +33,8 @@ pub struct AppModel {
     shell_tweaks: Controller<ShellTweaksModel>,
     #[allow(dead_code)]
     diagnostics: Controller<DiagnosticsModel>,
+    #[allow(dead_code)]
+    wallpaper_slideshow: Controller<WallpaperSlideshowModel>,
     toast_overlay: adw::ToastOverlay,
 }
 
@@ -93,6 +98,12 @@ impl SimpleComponent for AppModel {
                 DiagnosticsOutput::Toast(s) => AppMsg::Toast(s),
             });
 
+        let wallpaper_slideshow = WallpaperSlideshowModel::builder()
+            .launch(services.clone())
+            .forward(sender.input_sender(), |msg| match msg {
+                WallpaperSlideshowOutput::Toast(s) => AppMsg::Toast(s),
+            });
+
         // Build the layout with ToastOverlay wrapping ToolbarView
         let toast_overlay = adw::ToastOverlay::new();
 
@@ -147,6 +158,12 @@ impl SimpleComponent for AppModel {
             "preferences-desktop-symbolic",
         );
         view_stack.add_titled_with_icon(
+            wallpaper_slideshow.widget(),
+            Some("wallpaper"),
+            "Wallpaper",
+            "preferences-desktop-wallpaper-symbolic",
+        );
+        view_stack.add_titled_with_icon(
             diagnostics.widget(),
             Some("diagnostics"),
             "Diagnostics",
@@ -167,6 +184,7 @@ impl SimpleComponent for AppModel {
             settings,
             shell_tweaks,
             diagnostics,
+            wallpaper_slideshow,
             toast_overlay: toast_overlay.clone(),
         };
 
