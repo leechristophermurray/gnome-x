@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use gio::prelude::*;
 use gnomex_app::ports::{ShellCustomizer, ShellProxy};
+use gnomex_app::use_cases::gdm_theme;
 use gnomex_app::use_cases::{ApplyThemeUseCase, CustomizeShellUseCase, PacksUseCase};
 use gnomex_domain::{
     DashSpec, ForegroundSpec, HeaderbarSpec, HexColor, InsetSpec, LayerSeparationSpec,
@@ -21,7 +22,8 @@ use gnomex_domain::{
 use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, DesktopAppLauncherOverrides, EgoClient, FilesystemInstaller,
     FilesystemThemeWriter, GSettingsAppSettings, GSettingsAppearance, GSettingsBlurMyShell,
-    GSettingsFloatingDock, GSettingsMutter, OcsClient, PackTomlStorage, VscodeThemer,
+    GSettingsFloatingDock, GSettingsMutter, OcsClient, PackTomlStorage, PkexecGdmThemer,
+    VscodeThemer,
 };
 use std::sync::Arc;
 
@@ -56,6 +58,23 @@ enum Commands {
     },
     /// Show current state and detected environment
     Status,
+    /// Apply a GNOME X theme NAME + accent to the GDM login-screen
+    /// dconf DB. Requires root — normally invoked via pkexec through
+    /// the `org.gnomex.gdm-theme.apply` polkit action.
+    #[command(name = "gdm-apply", hide = true)]
+    GdmApply {
+        /// Shell theme NAME (not path). Must match [A-Za-z0-9._-]+.
+        #[arg(long)]
+        theme: String,
+        /// Accent colour as #rrggbb.
+        #[arg(long)]
+        accent: String,
+    },
+    /// Remove GNOME X-authored overrides from the GDM dconf DB.
+    /// Requires root; normally invoked via pkexec through the
+    /// `org.gnomex.gdm-theme.reset` polkit action.
+    #[command(name = "gdm-reset", hide = true)]
+    GdmReset,
 }
 
 #[derive(Subcommand)]
@@ -98,6 +117,8 @@ fn main() -> Result<()> {
         Commands::Theme { action } => handle_theme(action),
         Commands::Pack { action } => handle_pack(action),
         Commands::Status => handle_status(),
+        Commands::GdmApply { theme, accent } => handle_gdm_apply(&theme, &accent),
+        Commands::GdmReset => handle_gdm_reset(),
     }
 }
 
@@ -120,6 +141,7 @@ fn handle_accent(action: AccentAction) -> Result<()> {
 
 fn handle_theme(action: ThemeAction) -> Result<()> {
     let apply_uc = build_apply_theme_use_case()?;
+    let app = gio::Settings::new(APP_SCHEMA);
     match action {
         ThemeAction::Apply => {
             let spec = build_spec_from_gsettings()?;
@@ -128,10 +150,28 @@ fn handle_theme(action: ThemeAction) -> Result<()> {
                 "Theme applied ({}) — restart apps to see changes",
                 apply_uc.detected_version()
             );
+
+            // GXF-003: opt-in extend to GDM. Off by default because it
+            // prompts for an admin password via polkit. We forward only
+            // the theme NAME + accent — the elevated helper hard-codes
+            // the write path and re-validates both inputs.
+            if app.boolean("apply-gdm-on-theme-apply") {
+                match apply_uc.apply_to_gdm(gnomex_app::use_cases::CUSTOM_THEME_NAME, &spec.tint.accent_hex) {
+                    Ok(()) => println!("Theme applied to GDM login screen as well."),
+                    Err(e) => eprintln!(
+                        "Warning: could not apply theme to GDM login screen: {e}"
+                    ),
+                }
+            }
         }
         ThemeAction::Reset => {
             apply_uc.reset().context("failed to reset theme")?;
             println!("Theme overrides removed");
+            if app.boolean("apply-gdm-on-theme-apply") {
+                if let Err(e) = apply_uc.reset_gdm() {
+                    eprintln!("Warning: could not reset GDM theme overrides: {e}");
+                }
+            }
         }
     }
     Ok(())
@@ -167,6 +207,104 @@ fn handle_pack(action: PackAction) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Root-side implementation of the polkit-elevated "apply a theme to
+/// GDM" action.
+///
+/// Trust boundary: assume the caller may be hostile. The only inputs
+/// we honour are `theme` (re-validated here against the same
+/// shell-identifier rules the unprivileged side uses) and `accent`
+/// (re-parsed as a hex colour). No paths are ever read from the
+/// caller; our write target is hard-coded to
+/// `/etc/dconf/db/gdm.d/90-gnome-x`, and the dconf snippet we emit
+/// is generated from the validated inputs only.
+fn handle_gdm_apply(theme_name_raw: &str, accent_raw: &str) -> Result<()> {
+    let theme = gdm_theme::validate_theme_name(theme_name_raw)
+        .map_err(|e| anyhow::anyhow!("invalid theme name: {e}"))?;
+    let accent = gdm_theme::validate_accent_hex(accent_raw)
+        .map_err(|e| anyhow::anyhow!("invalid accent hex: {e}"))?;
+
+    let path = gdm_theme::gdm_dconf_snippet_path(None);
+    let snippet = gdm_theme::render_gdm_dconf_snippet(theme, &accent);
+    tracing::info!("writing GDM dconf snippet to {}", path.display());
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    std::fs::write(&path, &snippet)
+        .with_context(|| format!("writing {}", path.display()))?;
+
+    // Re-build the gdm dconf DB. Best-effort: log but do not fail
+    // the apply if the tool is missing — the file is already on disk
+    // and the user's next reboot will trigger a rebuild via the
+    // systemd unit that runs `dconf update` for GDM on package
+    // upgrade anyway.
+    run_best_effort("dconf", &["update"]);
+    // SELinux: on Fedora/RHEL the file context has to match etc_t so
+    // the gdm user can read it post-reboot. No-op if restorecon isn't
+    // present (Ubuntu/Arch defaults).
+    run_best_effort("restorecon", &["-R", gdm_theme::GDM_DCONF_DB_DIR]);
+
+    println!(
+        "GDM dconf snippet written to {} (theme='{theme}', accent='{}')",
+        path.display(),
+        accent.as_str()
+    );
+    Ok(())
+}
+
+fn handle_gdm_reset() -> Result<()> {
+    let path = gdm_theme::gdm_dconf_snippet_path(None);
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            if !gdm_theme::looks_like_managed_snippet(&content) {
+                anyhow::bail!(
+                    "refusing to remove {}: missing the GNOME X managed-region marker \
+                     (looks like this file was authored by someone else)",
+                    path.display()
+                );
+            }
+            std::fs::remove_file(&path)
+                .with_context(|| format!("removing {}", path.display()))?;
+            tracing::info!("removed {}", path.display());
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!("{} does not exist; nothing to reset", path.display());
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "reading {}: {e}",
+                path.display()
+            ));
+        }
+    }
+    run_best_effort("dconf", &["update"]);
+    run_best_effort("restorecon", &["-R", gdm_theme::GDM_DCONF_DB_DIR]);
+    println!("GDM theme overrides removed.");
+    Ok(())
+}
+
+/// Best-effort subprocess spawn. Used for `dconf update` and
+/// `restorecon`, both of which may be absent on some distros.
+/// Absence is logged at debug level and treated as a no-op; a
+/// non-zero exit is logged at warn level but not propagated.
+fn run_best_effort(bin: &str, args: &[&str]) {
+    match std::process::Command::new(bin).args(args).status() {
+        Ok(s) if s.success() => {
+            tracing::info!("{bin} {:?} ok", args);
+        }
+        Ok(s) => {
+            tracing::warn!("{bin} {:?} exited with {s}", args);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::debug!("{bin} not installed — skipping");
+        }
+        Err(e) => {
+            tracing::warn!("spawning {bin}: {e}");
+        }
+    }
 }
 
 fn handle_status() -> Result<()> {
@@ -266,7 +404,8 @@ fn build_apply_theme_use_case() -> Result<ApplyThemeUseCase> {
         .with_external_themer(Arc::new(VscodeThemer::new()))
         .with_external_themer(Arc::new(ChromiumThemer::new()))
         .with_mutter_settings(mutter)
-        .with_app_launcher_overrides(launcher))
+        .with_app_launcher_overrides(launcher)
+        .with_gdm_themer(Arc::new(PkexecGdmThemer::new())))
 }
 
 fn build_ext_controllers() -> gnomex_infra::shell_customizer::ExtensionControllers {
