@@ -270,5 +270,46 @@
       <summary>Wallpaper slideshow shuffle (GXF-072)</summary>
       <description>When true, the slideshow view randomises picture order before writing the XML.</description>
     </key>
+    <key name="wallpaper-slideshow-mode" type="s">
+      <choices>
+        <choice value="interval"/>
+        <choice value="tod"/>
+      </choices>
+      <default>"interval"</default>
+      <summary>Wallpaper slideshow mode</summary>
+      <description>"interval" cycles every wallpaper-slideshow-interval seconds; "tod" (time of day) swaps wallpapers at sunrise/day/sunset/night wall-clock moments.</description>
+    </key>
+    <key name="wallpaper-tod-sunrise-picture" type="s">
+      <default>""</default>
+      <summary>Time-of-day sunrise wallpaper</summary>
+    </key>
+    <key name="wallpaper-tod-day-picture" type="s">
+      <default>""</default>
+      <summary>Time-of-day day wallpaper</summary>
+    </key>
+    <key name="wallpaper-tod-sunset-picture" type="s">
+      <default>""</default>
+      <summary>Time-of-day sunset wallpaper</summary>
+    </key>
+    <key name="wallpaper-tod-night-picture" type="s">
+      <default>""</default>
+      <summary>Time-of-day night wallpaper</summary>
+    </key>
+    <key name="wallpaper-tod-sunrise-minute" type="u">
+      <default>360</default>
+      <summary>Time-of-day sunrise transition (minutes since midnight)</summary>
+    </key>
+    <key name="wallpaper-tod-day-minute" type="u">
+      <default>540</default>
+      <summary>Time-of-day day transition (minutes since midnight)</summary>
+    </key>
+    <key name="wallpaper-tod-sunset-minute" type="u">
+      <default>1080</default>
+      <summary>Time-of-day sunset transition (minutes since midnight)</summary>
+    </key>
+    <key name="wallpaper-tod-night-minute" type="u">
+      <default>1260</default>
+      <summary>Time-of-day night transition (minutes since midnight)</summary>
+    </key>
   </schema>
 </schemalist>

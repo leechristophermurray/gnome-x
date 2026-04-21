@@ -183,8 +183,21 @@ pub struct PaletteEntry {
 }
 
 /// Extract up to [`MAX_PALETTE`] distinct candidate colours from
-/// `image_path`. Returns empty if the image loads but has no
-/// sufficiently-saturated pixels.
+/// `image_path` using **k-means clustering in CIELAB space**, then
+/// snap each cluster centroid to the nearest GNOME accent by CIE76
+/// ΔE. Returns empty if the image loads but has no sufficiently-
+/// chromatic pixels.
+///
+/// Why LAB + k-means instead of HSV bucketing:
+/// - HSV bins are perceptually uneven (a 10° shift at red is a bigger
+///   visible change than at cyan), so the old extractor would often
+///   collapse two visibly-distinct wallpaper hues into the same
+///   accent while splitting what users saw as "one colour".
+/// - k-means fits actual image structure; bucketing picks whatever
+///   lands in the densest fixed cell, which can be off-centre.
+/// - The final snap uses ΔE rather than RGB Euclidean, so the
+///   "orange" bucket wins for actually-orange pixels instead of
+///   occasional RGB-close-but-visibly-different yellows.
 pub fn extract_palette(image_path: &Path) -> Result<Vec<PaletteEntry>> {
     let pixbuf = Pixbuf::from_file_at_scale(
         image_path.to_str().context("non-utf8 image path")?,
@@ -199,33 +212,50 @@ pub fn extract_palette(image_path: &Path) -> Result<Vec<PaletteEntry>> {
     let channels = pixbuf.n_channels() as usize;
     let data = pixels.as_ref();
 
-    let mut buckets: std::collections::HashMap<(u16, u8, u8), u32> = std::collections::HashMap::new();
+    // --- Step 1: collect chromatic pixels as LAB samples. ---
+    // Drop desaturated (grey / near-white / near-black) pixels before
+    // clustering so the k-means centroids track meaningful accents,
+    // not the wallpaper's background neutral.
+    let mut samples: Vec<([f32; 3], (u8, u8, u8))> = Vec::with_capacity(64 * 64);
     for chunk in data.chunks_exact(channels) {
         if channels < 3 {
             continue;
         }
         let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
-        let (h, s, v) = color::rgb_to_hsv(r, g, b);
-        if s < 15 || v < 25 || v > 240 {
+        let (_, s, v) = color::rgb_to_hsv(r, g, b);
+        if s < 20 || v < 25 || v > 240 {
             continue;
         }
-        let hue_bin = (h / 10) * 10;
-        let sat_bin = (s / 85).min(2);
-        let val_bin = (v / 85).min(2);
-        *buckets.entry((hue_bin, sat_bin, val_bin)).or_default() += 1;
+        let (l, a, bv) = color::rgb_to_lab(r, g, b);
+        samples.push(([l, a, bv], (r, g, b)));
+    }
+    if samples.is_empty() {
+        return Ok(Vec::new());
     }
 
-    let mut sorted: Vec<_> = buckets.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    // --- Step 2: k-means in LAB. ---
+    // K is 2× the final palette size so we can drop near-duplicate
+    // clusters (same mapped accent) without ending up short.
+    const K: usize = 10;
+    const MAX_ITERS: usize = 12;
+    let (centroids, counts) = kmeans_lab(&samples, K, MAX_ITERS);
+
+    // --- Step 3: rank clusters by population, snap to GNOME-9 by ΔE. ---
+    let mut ranked: Vec<(usize, [f32; 3], u32)> = centroids
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| (i, c, counts[i]))
+        .collect();
+    ranked.sort_by(|a, b| b.2.cmp(&a.2));
 
     let mut results: Vec<PaletteEntry> = Vec::with_capacity(MAX_PALETTE);
     let mut seen_accents: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for ((hue_bin, sat_bin, val_bin), _) in sorted.iter().take(20) {
-        let h = *hue_bin + 5;
-        let s = (*sat_bin as u16) * 85 + 42;
-        let v = (*val_bin as u16) * 85 + 42;
-        let (r, g, b) = color::hsv_to_rgb(h, s.min(255) as u8, v.min(255) as u8);
-        let accent_id = closest_accent_id(r, g, b);
+    for (_, lab, pop) in ranked {
+        if pop == 0 {
+            continue;
+        }
+        let (r, g, b) = lab_to_closest_rgb(lab, &samples);
+        let accent_id = closest_accent_id_lab(lab);
         if seen_accents.contains(&accent_id) {
             continue;
         }
@@ -241,15 +271,107 @@ pub fn extract_palette(image_path: &Path) -> Result<Vec<PaletteEntry>> {
     Ok(results)
 }
 
-/// Nearest GNOME accent id for an (r, g, b) triple.
+/// Pick the sample RGB whose LAB representation is closest to the
+/// given centroid. We store RGB in each sample specifically so the
+/// palette swatch hex is a *real colour from the wallpaper*, not a
+/// synthesised one from the centroid (which, after LAB→RGB round-
+/// trip, can drift a few units and produce off-brand swatches).
+fn lab_to_closest_rgb(lab: [f32; 3], samples: &[([f32; 3], (u8, u8, u8))]) -> (u8, u8, u8) {
+    let mut best = samples[0].1;
+    let mut best_d = f32::MAX;
+    for (s_lab, s_rgb) in samples {
+        let d = color::lab_distance((lab[0], lab[1], lab[2]), (s_lab[0], s_lab[1], s_lab[2]));
+        if d < best_d {
+            best_d = d;
+            best = *s_rgb;
+        }
+    }
+    best
+}
+
+/// Pure k-means on LAB samples. Initialises centroids by deterministic
+/// stride-picking (good-enough for wallpaper palettes and gives stable
+/// results across runs, which matters for regression tests).
+fn kmeans_lab(
+    samples: &[([f32; 3], (u8, u8, u8))],
+    k: usize,
+    max_iters: usize,
+) -> (Vec<[f32; 3]>, Vec<u32>) {
+    let effective_k = k.min(samples.len()).max(1);
+    let mut centroids: Vec<[f32; 3]> = (0..effective_k)
+        .map(|i| samples[i * samples.len() / effective_k].0)
+        .collect();
+
+    let mut assignments = vec![0usize; samples.len()];
+    for _ in 0..max_iters {
+        // Assign
+        let mut changed = false;
+        for (si, (lab, _)) in samples.iter().enumerate() {
+            let mut best = 0;
+            let mut best_d = f32::MAX;
+            for (ci, c) in centroids.iter().enumerate() {
+                let d = color::lab_distance((lab[0], lab[1], lab[2]), (c[0], c[1], c[2]));
+                if d < best_d {
+                    best_d = d;
+                    best = ci;
+                }
+            }
+            if assignments[si] != best {
+                assignments[si] = best;
+                changed = true;
+            }
+        }
+        // Update
+        let mut sums = vec![[0.0f32; 3]; effective_k];
+        let mut counts = vec![0u32; effective_k];
+        for (si, lab) in samples.iter().map(|(lab, _)| lab).enumerate() {
+            let ci = assignments[si];
+            sums[ci][0] += lab[0];
+            sums[ci][1] += lab[1];
+            sums[ci][2] += lab[2];
+            counts[ci] += 1;
+        }
+        for ci in 0..effective_k {
+            if counts[ci] > 0 {
+                let n = counts[ci] as f32;
+                centroids[ci] = [sums[ci][0] / n, sums[ci][1] / n, sums[ci][2] / n];
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Final pass: count assignments per centroid.
+    let mut counts = vec![0u32; effective_k];
+    for a in &assignments {
+        counts[*a] += 1;
+    }
+    (centroids, counts)
+}
+
+/// Nearest GNOME accent id for an (r, g, b) triple — preserved for
+/// backwards compatibility (UI callers still use this). Goes via LAB
+/// now instead of RGB-Euclidean.
 pub fn closest_accent_id(r: u8, g: u8, b: u8) -> String {
+    let lab = color::rgb_to_lab(r, g, b);
+    closest_accent_id_lab([lab.0, lab.1, lab.2])
+}
+
+/// LAB-native variant used by the extractor — saves a redundant
+/// `rgb_to_lab` call per candidate.
+fn closest_accent_id_lab(candidate: [f32; 3]) -> String {
     let mut best = "blue";
-    let mut best_dist = u32::MAX;
+    let mut best_d = f32::MAX;
     for &(id, hex) in ACCENT_COLORS {
-        let accent = HexColor::new(hex).map(|c| c.to_rgb()).unwrap_or((0, 0, 0));
-        let dist = color::color_distance((r, g, b), accent);
-        if dist < best_dist {
-            best_dist = dist;
+        let (r, g, b) = HexColor::new(hex).map(|c| c.to_rgb()).unwrap_or((0, 0, 0));
+        let a = color::rgb_to_lab(r, g, b);
+        let d = color::lab_distance(
+            (candidate[0], candidate[1], candidate[2]),
+            (a.0, a.1, a.2),
+        );
+        if d < best_d {
+            best_d = d;
             best = id;
         }
     }
@@ -413,6 +535,67 @@ mod tests {
     fn locked_accent_empty_palette_is_none() {
         assert_eq!(locked_accent(&[], 0), None);
         assert_eq!(locked_accent(&[], -1), None);
+    }
+
+    #[test]
+    fn closest_accent_gnome_seed_hexes_snap_to_themselves() {
+        // Each of the 9 stock GNOME accents must snap to its own id
+        // under the LAB-ΔE classifier — otherwise the extractor would
+        // misclassify a pure-accent wallpaper.
+        for &(id, hex) in ACCENT_COLORS {
+            let (r, g, b) = gnomex_domain::HexColor::new(hex).unwrap().to_rgb();
+            assert_eq!(
+                closest_accent_id(r, g, b),
+                id,
+                "LAB snap for {hex} expected {id}",
+            );
+        }
+    }
+
+    #[test]
+    fn closest_accent_off_palette_orange_snaps_to_orange() {
+        // #e67c20 is a warm orange about 10 LAB units off from our
+        // stock `orange (#ed5b00)`. ΔE should pick orange, not red or
+        // yellow.
+        assert_eq!(closest_accent_id(0xe6, 0x7c, 0x20), "orange");
+    }
+
+    #[test]
+    fn kmeans_lab_converges_on_simple_two_colour_input() {
+        // Two obvious clusters (pure red / pure blue pixels repeated);
+        // k-means with K>=2 should find both centroids even though
+        // initialisation is deterministic.
+        let red_lab = gnomex_domain::color::rgb_to_lab(255, 0, 0);
+        let blue_lab = gnomex_domain::color::rgb_to_lab(0, 0, 255);
+        let samples: Vec<([f32; 3], (u8, u8, u8))> = std::iter::repeat(([red_lab.0, red_lab.1, red_lab.2], (255, 0, 0)))
+            .take(50)
+            .chain(
+                std::iter::repeat(([blue_lab.0, blue_lab.1, blue_lab.2], (0, 0, 255))).take(50),
+            )
+            .collect();
+        let (centroids, counts) = kmeans_lab(&samples, 3, 12);
+        // At least two non-empty centroids, and the non-empty ones
+        // must sit near our seed colours.
+        let non_empty: Vec<_> = centroids
+            .iter()
+            .zip(counts.iter())
+            .filter(|(_, c)| **c > 0)
+            .map(|(l, _)| *l)
+            .collect();
+        assert!(non_empty.len() >= 2);
+        let near_red = non_empty.iter().any(|c| {
+            gnomex_domain::color::lab_distance(
+                (c[0], c[1], c[2]),
+                (red_lab.0, red_lab.1, red_lab.2),
+            ) < 2.0
+        });
+        let near_blue = non_empty.iter().any(|c| {
+            gnomex_domain::color::lab_distance(
+                (c[0], c[1], c[2]),
+                (blue_lab.0, blue_lab.1, blue_lab.2),
+            ) < 2.0
+        });
+        assert!(near_red && near_blue, "expected clusters near red AND blue");
     }
 
     #[test]

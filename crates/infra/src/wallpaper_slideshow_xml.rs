@@ -20,7 +20,7 @@
 use gnomex_app::ports::WallpaperSlideshowWriter;
 use gnomex_app::AppError;
 use gnomex_domain::{
-    slideshow_xml_relative_path, FixedClock, SlideshowClock, StartTime,
+    FixedClock, SlideshowClock, StartTime,
     WallpaperSlideshow,
 };
 use std::io::Write;
@@ -39,6 +39,10 @@ pub struct XdgWallpaperSlideshowWriter {
     /// swap in a [`FixedClock`] — already the default, so the same
     /// knob covers both worlds.
     clock: Box<dyn SlideshowClock>,
+    /// Filename-uniqueness suffix. See [`new_xml_path`] for why this
+    /// exists — it defeats GSettings' same-value write suppression
+    /// by guaranteeing every Apply lands on a distinct path.
+    stamp_provider: Box<dyn Fn() -> String + Send + Sync>,
 }
 
 impl XdgWallpaperSlideshowWriter {
@@ -58,6 +62,13 @@ impl XdgWallpaperSlideshowWriter {
         Self {
             dir: dir.into(),
             clock: Box::new(FixedClock(StartTime::EPOCH)),
+            stamp_provider: Box::new(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+                    .to_string()
+            }),
         }
     }
 
@@ -68,14 +79,56 @@ impl XdgWallpaperSlideshowWriter {
         self
     }
 
-    fn xml_path(&self, name: &str) -> PathBuf {
-        // Re-use the domain-level relative path helper so both
-        // adapter and any future callers converge on the same layout.
-        let rel = slideshow_xml_relative_path(name);
-        // `slideshow_xml_relative_path` prepends the subdir; strip it
-        // because our `dir` already points at that subdir.
-        let stem = rel.file_name().expect("helper yields a file name");
-        self.dir.join(stem)
+    /// Override the filename-uniqueness suffix. Production uses UNIX
+    /// epoch seconds so every Apply lands on a new path and GSettings
+    /// can't suppress the `picture-uri` write. Tests inject a fixed
+    /// string for deterministic fixture comparisons.
+    pub fn with_stamp_provider(
+        mut self,
+        provider: Box<dyn Fn() -> String + Send + Sync>,
+    ) -> Self {
+        self.stamp_provider = provider;
+        self
+    }
+
+    /// Candidate path for a *new* apply — filename carries a unique
+    /// suffix so the resulting `file://` URI differs from any prior
+    /// Apply's URI. That forces `GSettings.set_string("picture-uri")`
+    /// to emit `changed` (DConf suppresses identical writes), and
+    /// GNOME Shell therefore re-reads the XML. Without this, a user
+    /// re-applying after tweaking slots sees the old slideshow keep
+    /// playing because picture-uri hasn't changed.
+    fn new_xml_path(&self, name: &str) -> PathBuf {
+        let stamp = (self.stamp_provider)();
+        self.dir.join(format!("{name}-{stamp}.xml"))
+    }
+
+    /// Glob-free match of legacy / previous-apply XMLs we want to
+    /// garbage-collect. Matches `<name>.xml` (the historic stable
+    /// filename) AND `<name>-*.xml`. Returning a `Vec<PathBuf>` up-
+    /// front rather than iterating lets the caller log + decide.
+    fn stale_xmls(&self, name: &str, keep: Option<&Path>) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let Ok(read) = std::fs::read_dir(&self.dir) else {
+            return out;
+        };
+        let prefix = format!("{name}-");
+        let legacy = format!("{name}.xml");
+        for entry in read.flatten() {
+            let path = entry.path();
+            if keep.map(|k| k == path).unwrap_or(false) {
+                continue;
+            }
+            let Some(fname) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let matches_new = fname.starts_with(&prefix) && fname.ends_with(".xml");
+            let matches_legacy = fname == legacy;
+            if matches_new || matches_legacy {
+                out.push(path);
+            }
+        }
+        out
     }
 }
 
@@ -95,7 +148,7 @@ impl WallpaperSlideshowWriter for XdgWallpaperSlideshowWriter {
         })?;
 
         let xml = render_slideshow_xml(slideshow, &*self.clock);
-        let final_path = self.xml_path(slideshow.name());
+        let final_path = self.new_xml_path(slideshow.name());
 
         // Atomic write: tmp sibling + rename.
         let tmp_path = final_path.with_extension("xml.tmp");
@@ -122,22 +175,58 @@ impl WallpaperSlideshowWriter for XdgWallpaperSlideshowWriter {
             ))
         })?;
 
+        // Garbage-collect any older *-<stamp>.xml manifests this
+        // writer (or a previous version of it) left behind so the
+        // directory doesn't grow unbounded. Best-effort: we log but
+        // don't fail the Apply on a cleanup error.
+        for stale in self.stale_xmls(slideshow.name(), Some(&final_path)) {
+            match std::fs::remove_file(&stale) {
+                Ok(_) => tracing::debug!("cleaned up stale slideshow {}", stale.display()),
+                Err(e) => tracing::warn!(
+                    "failed to clean up {}: {e} (continuing)",
+                    stale.display()
+                ),
+            }
+        }
+
         tracing::info!(
-            "wrote slideshow '{}' ({} pictures) to {}",
+            "wrote slideshow '{}' ({} pictures, mode={:?}) to {}",
             slideshow.name(),
             slideshow.pictures().len(),
+            slideshow.mode(),
             final_path.display()
         );
         Ok(final_path)
     }
 
     fn delete(&self, name: &str) -> Result<(), AppError> {
-        let path = self.xml_path(name);
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(|e| {
+        // Delete every *-<stamp>.xml (and any legacy `<name>.xml`)
+        // belonging to this slideshow. Called from the UI's "clear"
+        // and pack-reset paths — if we missed some, the next Apply
+        // would garbage-collect them anyway, but we don't want to
+        // rely on that for deletion semantics.
+        let mut last_err: Option<AppError> = None;
+        for path in self.stale_xmls(name, None) {
+            if let Err(e) = std::fs::remove_file(&path) {
+                last_err = Some(AppError::Storage(format!(
+                    "delete {}: {e}",
+                    path.display(),
+                )));
+            }
+        }
+        if let Some(e) = last_err {
+            return Err(e);
+        }
+        // Legacy single-path behaviour kept as a fallback so old
+        // callers that still know only about `<name>.xml` (if any
+        // exist outside `stale_xmls`) get a clear error if anything
+        // is left.
+        let legacy = self.dir.join(format!("{name}.xml"));
+        if legacy.exists() {
+            std::fs::remove_file(&legacy).map_err(|e| {
                 AppError::Storage(format!(
                     "delete {}: {e}",
-                    path.display()
+                    legacy.display()
                 ))
             })?;
         }
@@ -161,22 +250,85 @@ pub fn render_slideshow_xml(
     slideshow: &WallpaperSlideshow,
     clock: &dyn SlideshowClock,
 ) -> String {
+    use gnomex_domain::SlideshowMode;
     let st = clock.now();
     let mut out = String::with_capacity(256 + slideshow.pictures().len() * 128);
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<!-- Generated by GNOME X - do not edit by hand -->\n");
     out.push_str("<background>\n");
-    write_starttime(&mut out, st);
-    let pictures = slideshow.pictures();
-    let interval = slideshow.interval_seconds() as f64;
-    let transition = slideshow.transition_seconds();
-    let n = pictures.len();
-    for i in 0..n {
-        let cur = &pictures[i];
-        let next = &pictures[(i + 1) % n];
-        write_static(&mut out, interval, cur);
-        write_transition(&mut out, transition, cur, next);
+
+    match slideshow.mode() {
+        SlideshowMode::Interval => {
+            write_starttime(&mut out, st);
+            let pictures = slideshow.pictures();
+            let interval = slideshow.interval_seconds() as f64;
+            let transition = slideshow.transition_seconds();
+            let n = pictures.len();
+            for i in 0..n {
+                let cur = &pictures[i];
+                let next = &pictures[(i + 1) % n];
+                write_static(&mut out, interval, cur);
+                write_transition(&mut out, transition, cur, next);
+            }
+        }
+        SlideshowMode::TimeOfDay {
+            sunrise_at,
+            day_at,
+            sunset_at,
+            night_at,
+        } => {
+            // GNOME interprets the XML relative to <starttime> and
+            // loops by wrapping the LAST <transition>'s `to` back to
+            // the FIRST <static>. The file MUST end on a transition
+            // (not a static) or GNOME treats the cycle as terminal
+            // and freezes — matching the Fedora / stock
+            // `/usr/share/backgrounds/*/<theme>.xml` pattern.
+            //
+            // Pin <starttime> to today at sunrise_at so at `sunrise`
+            // (t=0 relative) GNOME shows the sunrise picture. The
+            // cycle progresses through day → sunset → night → wraps
+            // back to sunrise.
+            let start = StartTime {
+                year: st.year,
+                month: st.month,
+                day: st.day,
+                hour: sunrise_at.hour,
+                minute: sunrise_at.minute,
+                second: 0,
+            };
+            write_starttime(&mut out, start);
+
+            let pics = slideshow.pictures();
+            let transition = slideshow.transition_seconds();
+            let t_sr = sunrise_at.seconds_since_midnight() as f64;
+            let t_d = day_at.seconds_since_midnight() as f64;
+            let t_ss = sunset_at.seconds_since_midnight() as f64;
+            let t_n = night_at.seconds_since_midnight() as f64;
+
+            // Static durations are the held-picture times. Each one
+            // runs from its own start moment to the next boundary
+            // minus the cross-fade transition that follows it.
+            let sunrise_dur = (t_d - t_sr - transition).max(1.0);
+            let day_dur = (t_ss - t_d - transition).max(1.0);
+            let sunset_dur = (t_n - t_ss - transition).max(1.0);
+            // Night spans from night_at through midnight back to
+            // sunrise_at of the NEXT day. Subtract the wrap transition.
+            let night_dur = (86_400.0 - (t_n - t_sr) - transition).max(1.0);
+
+            // 4 statics + 4 transitions in alternating order. The
+            // final transition wraps from night → sunrise so GNOME
+            // knows to loop back to the first static.
+            write_static(&mut out, sunrise_dur, &pics[0]);
+            write_transition(&mut out, transition, &pics[0], &pics[1]);
+            write_static(&mut out, day_dur, &pics[1]);
+            write_transition(&mut out, transition, &pics[1], &pics[2]);
+            write_static(&mut out, sunset_dur, &pics[2]);
+            write_transition(&mut out, transition, &pics[2], &pics[3]);
+            write_static(&mut out, night_dur, &pics[3]);
+            write_transition(&mut out, transition, &pics[3], &pics[0]);
+        }
     }
+
     out.push_str("</background>\n");
     out
 }
@@ -345,5 +497,108 @@ mod tests {
         assert!(xml.contains("<year>2030</year>"));
         assert!(xml.contains("<month>7</month>"));
         assert!(xml.contains("<second>56</second>"));
+    }
+
+    fn tod_slideshow() -> WallpaperSlideshow {
+        use gnomex_domain::TimeOfDay;
+        WallpaperSlideshow::time_of_day(
+            "tod",
+            (PathBuf::from("/p/sunrise.jpg"), TimeOfDay::new(6, 0)),
+            (PathBuf::from("/p/day.jpg"), TimeOfDay::new(9, 0)),
+            (PathBuf::from("/p/sunset.jpg"), TimeOfDay::new(18, 0)),
+            (PathBuf::from("/p/night.jpg"), TimeOfDay::new(21, 0)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn time_of_day_xml_pins_starttime_to_sunrise_at() {
+        // tod_slideshow has sunrise_at = 06:00; <starttime> must be
+        // today at 06:00 so GNOME's cycle phase lines up with the
+        // user's declared moments.
+        let xml = render_slideshow_xml(
+            &tod_slideshow(),
+            &FixedClock(StartTime {
+                year: 2030,
+                month: 3,
+                day: 15,
+                hour: 14,
+                minute: 22,
+                second: 0,
+            }),
+        );
+        assert!(xml.contains("<year>2030</year>"));
+        assert!(xml.contains("<month>3</month>"));
+        assert!(xml.contains("<day>15</day>"));
+        assert!(xml.contains("<hour>6</hour>"));
+        assert!(xml.contains("<minute>0</minute>"));
+        assert!(xml.contains("<second>0</second>"));
+    }
+
+    #[test]
+    fn time_of_day_xml_emits_four_slot_cycle_in_correct_order() {
+        let xml = render_slideshow_xml(
+            &tod_slideshow(),
+            &FixedClock(StartTime::EPOCH),
+        );
+        // Ordered: sunrise → day → sunset → night, ending with a
+        // wrap transition back to sunrise.
+        let sunrise = xml.find("/p/sunrise.jpg").unwrap();
+        let day = xml.find("/p/day.jpg").unwrap();
+        let sunset = xml.find("/p/sunset.jpg").unwrap();
+        let night = xml.find("/p/night.jpg").unwrap();
+        assert!(sunrise < day);
+        assert!(day < sunset);
+        assert!(sunset < night);
+
+        // The XML must END with a <transition>, not a <static> —
+        // otherwise GNOME's slideshow engine treats the cycle as
+        // terminal and freezes on the last static.
+        let trimmed = xml.trim_end().trim_end_matches("</background>").trim_end();
+        assert!(
+            trimmed.ends_with("</transition>"),
+            "XML must end on a <transition> so GNOME loops — got tail: {:?}",
+            &trimmed[trimmed.len().saturating_sub(60)..],
+        );
+    }
+
+    #[test]
+    fn time_of_day_xml_wraps_from_night_to_sunrise() {
+        let xml = render_slideshow_xml(
+            &tod_slideshow(),
+            &FixedClock(StartTime::EPOCH),
+        );
+        // Last <transition> block must go night → sunrise so the
+        // cycle wraps on loop. Scrape from the last <transition> tag
+        // to end and look for both filenames.
+        let last_trans = xml.rfind("<transition").unwrap();
+        let tail = &xml[last_trans..];
+        assert!(tail.contains("<from>/p/night.jpg</from>"));
+        assert!(tail.contains("<to>/p/sunrise.jpg</to>"));
+    }
+
+    #[test]
+    fn time_of_day_xml_durations_sum_to_a_full_day() {
+        use std::cell::RefCell;
+        // Scrape every <duration>N.M</duration> numeric value and
+        // require the sum to equal 86400 ± 0.5 s (floating point).
+        let xml = render_slideshow_xml(
+            &tod_slideshow(),
+            &FixedClock(StartTime::EPOCH),
+        );
+        let total = RefCell::new(0.0f64);
+        let mut rest = xml.as_str();
+        while let Some(i) = rest.find("<duration>") {
+            let after = &rest[i + "<duration>".len()..];
+            let j = after.find("</duration>").unwrap();
+            let value: f64 = after[..j].trim().parse().unwrap();
+            *total.borrow_mut() += value;
+            rest = &after[j + "</duration>".len()..];
+        }
+        let got = *total.borrow();
+        assert!(
+            (got - 86_400.0).abs() < 1.0,
+            "durations summed to {got}, expected ~86400",
+        );
     }
 }
