@@ -215,6 +215,21 @@ fn setup_wallpaper_watcher() {
             if wants_reactive {
                 apply_accent_from_palette(&app, &palette);
             }
+
+            // Material-palette re-apply. When the user has MD3 on,
+            // a wallpaper change means the derived roles change too,
+            // so the CSS output must be regenerated. We shell out to
+            // `experiencectl theme apply` rather than link
+            // `ApplyThemeUseCase` into the daemon — same code path
+            // as the UI's Apply button, no drift risk.
+            let md_on = app
+                .settings_schema()
+                .map(|s| s.has_key("tb-md-enabled"))
+                .unwrap_or(false)
+                && app.boolean("tb-md-enabled");
+            if md_on {
+                kick_experiencectl_apply();
+            }
         })
     };
 
@@ -491,3 +506,22 @@ fn nearest_accent_id(value: &str) -> String {
     best.to_owned()
 }
 
+
+/// Spawn `experiencectl theme apply` so the UI's full apply path
+/// (CSS regen, external themers, scaling, external-app fanout) runs
+/// against the current GSettings state. Best-effort: we log but
+/// never panic on a missing binary.
+fn kick_experiencectl_apply() {
+    match std::process::Command::new("experiencectl")
+        .args(["theme", "apply"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_) => tracing::info!("material-palette: kicked experiencectl theme apply"),
+        Err(e) => tracing::warn!(
+            "material-palette: failed to spawn experiencectl theme apply: {e}"
+        ),
+    }
+}

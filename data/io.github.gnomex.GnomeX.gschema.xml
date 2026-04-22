@@ -316,5 +316,20 @@
       <default>1260</default>
       <summary>Time-of-day night transition (minutes since midnight)</summary>
     </key>
+    <key name="tb-md-enabled" type="b">
+      <default>false</default>
+      <summary>Material-palette wallpaper theming</summary>
+      <description>When enabled, the theme layer ignores per-widget colour overrides and derives a three-role palette (background / primary / secondary) from the top three wallpaper colours. The user picks which of six permutations maps the three colours to the three roles for the day and night colour schemes. Daemon re-derives on every wallpaper change.</description>
+    </key>
+    <key name="tb-md-day-perm" type="u">
+      <default>0</default>
+      <summary>Material-palette day permutation index</summary>
+      <description>Which of the six Background/Primary/Secondary permutations is applied under the light scheme. 0–5, clamped on read. Ordering matches `gnomex_domain::Permutation::ALL`.</description>
+    </key>
+    <key name="tb-md-night-perm" type="u">
+      <default>0</default>
+      <summary>Material-palette night permutation index</summary>
+      <description>Same as tb-md-day-perm but for the dark scheme.</description>
+    </key>
   </schema>
 </schemalist>

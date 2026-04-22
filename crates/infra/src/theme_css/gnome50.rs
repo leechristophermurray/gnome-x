@@ -60,13 +60,27 @@ impl Gnome50CssGenerator {
     }
 
     fn shell(&self, spec: &ThemeSpec) -> String {
-        let accent = spec.tint.accent_hex.to_rgb();
-        let pct = spec.tint.intensity.as_fraction() as f32;
+        // Same override logic as `tint_shell_surfaces` in common.rs —
+        // Material-palette mode feeds us the muted role-background
+        // via `shell_tint_override`. We bias low-intensity values up
+        // so the shell actually reads as tinted at the stock 5 %
+        // default instead of looking like vanilla Adwaita dark.
+        let base_hex = spec
+            .shell_tint_override
+            .as_ref()
+            .unwrap_or(&spec.tint.accent_hex);
+        let base = base_hex.to_rgb();
+        let raw_pct = spec.tint.intensity.as_fraction() as f32;
+        let pct = if spec.shell_tint_override.is_some() {
+            0.25 + 0.75 * raw_pct
+        } else {
+            raw_pct
+        };
 
-        let panel = gnomex_domain::color::blend(PANEL_BASE, accent, pct);
-        let dash = gnomex_domain::color::blend(DASH_BASE, accent, pct);
-        let osd = gnomex_domain::color::blend(OSD_BASE, accent, pct);
-        let search = gnomex_domain::color::blend(SEARCH_BASE, accent, pct);
+        let panel = gnomex_domain::color::blend(PANEL_BASE, base, pct);
+        let dash = gnomex_domain::color::blend(DASH_BASE, base, pct);
+        let osd = gnomex_domain::color::blend(OSD_BASE, base, pct);
+        let search = gnomex_domain::color::blend(SEARCH_BASE, base, pct);
 
         let pr = spec.panel.radius.as_i32();
         let po = spec.panel.opacity.as_fraction();

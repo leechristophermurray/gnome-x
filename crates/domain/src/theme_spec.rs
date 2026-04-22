@@ -405,6 +405,18 @@ pub struct ThemeSpec {
     /// HiDPI / fractional-scaling / per-app override controls.
     /// Defaulted so untouched packs emit no GSettings writes.
     pub scaling: ScalingSpec,
+    /// Material-Design-3 wallpaper theming. Default is disabled so
+    /// the feature only activates when the user opts in; at that
+    /// point the use case overwrites `widget_colors` with a
+    /// derivation from the live wallpaper palette.
+    pub material_palette: crate::MaterialPaletteSpec,
+    /// Override for the colour the shell CSS tints its surfaces
+    /// (panel / dash / OSD / search entry) with. When `None`, the
+    /// generators use `tint.accent_hex` (the classic behaviour).
+    /// Material-palette mode sets this to the muted role-background
+    /// so the top panel and calendar popover visually match the
+    /// window chrome rather than staying on the stock accent.
+    pub shell_tint_override: Option<HexColor>,
 }
 
 impl ThemeSpec {
@@ -451,6 +463,8 @@ impl ThemeSpec {
             },
             overview_blur: true,
             scaling: ScalingSpec::default(),
+            material_palette: crate::MaterialPaletteSpec::default(),
+            shell_tint_override: None,
         }
     }
 }

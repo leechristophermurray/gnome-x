@@ -376,14 +376,40 @@ pub struct ShellSurfaces {
 }
 
 /// Dark-mode base colors for shell surfaces.
+///
+/// When `spec.shell_tint_override` is `Some`, that hex is blended
+/// into the dark shell bases instead of `spec.tint.accent_hex`. The
+/// Material-palette use case sets the override so the top panel /
+/// dash / OSD popups pick up the MD3 muted background rather than
+/// staying on the stock accent. In non-MD3 mode `override` is
+/// `None` and we fall through to the classic accent-driven tinting.
 pub fn tint_shell_surfaces(spec: &ThemeSpec) -> ShellSurfaces {
-    let accent = spec.tint.accent_hex.to_rgb();
+    let base_hex = spec
+        .shell_tint_override
+        .as_ref()
+        .unwrap_or(&spec.tint.accent_hex);
+    let base = base_hex.to_rgb();
     let pct = spec.tint.intensity.as_fraction() as f32;
 
+    // When MD3 supplies the override, the user expects the muted
+    // palette colour to actually read on screen — blend at a
+    // higher floor so low tint-intensity values still produce a
+    // visible tint. Without this, t = 0.05 (the stock default) on
+    // a deep-blue wallpaper would leave the panel indistinguishable
+    // from plain Adwaita dark.
+    let pct = if spec.shell_tint_override.is_some() {
+        // Bias toward the palette: map [0.0, 1.0] → [0.25, 1.0].
+        // The shell is small real estate; overdoing is better than
+        // a shell that looks untinted when everything else is.
+        0.25 + 0.75 * pct
+    } else {
+        pct
+    };
+
     ShellSurfaces {
-        panel: blend((0x24, 0x24, 0x28), accent, pct),
-        dash: blend((0x30, 0x30, 0x34), accent, pct),
-        osd: blend((0x30, 0x30, 0x34), accent, pct),
-        search: blend((0x3a, 0x3a, 0x3e), accent, pct),
+        panel: blend((0x24, 0x24, 0x28), base, pct),
+        dash: blend((0x30, 0x30, 0x34), base, pct),
+        osd: blend((0x30, 0x30, 0x34), base, pct),
+        search: blend((0x3a, 0x3a, 0x3e), base, pct),
     }
 }
