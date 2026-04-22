@@ -20,8 +20,8 @@ use gnomex_infra::{
     ChromiumThemer, DbusShellProxy, DesktopAppLauncherOverrides, EgoClient, FilesystemInstaller,
     FilesystemThemeWriter, FsThemeRenderTrigger, GSettingsAppSettings, GSettingsAppearance,
     GSettingsBlurMyShell, GSettingsFloatingDock, GSettingsMutter, GioThemingConflictDetector,
-    OcsClient, PackTomlStorage, PkexecGdmThemer, VscodeThemer, WmctrlDecorationProbe,
-    XdgWallpaperSlideshowWriter,
+    OcsClient, PackTomlStorage, PapirusFoldersRecolorer, PkexecGdmThemer, VscodeThemer,
+    WmctrlDecorationProbe, XdgWallpaperSlideshowWriter,
 };
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -132,7 +132,10 @@ impl AppServices {
                 .with_external_themer(Arc::new(ChromiumThemer::new()))
                 .with_mutter_settings(Arc::new(GSettingsMutter::new()))
                 .with_app_launcher_overrides(Arc::new(DesktopAppLauncherOverrides::new()))
-                .with_gdm_themer(Arc::new(PkexecGdmThemer::new())),
+                .with_gdm_themer(Arc::new(PkexecGdmThemer::new()))
+                .with_icon_recolorer(Arc::new(PapirusFoldersRecolorer::new(
+                    appearance.clone(),
+                ))),
         );
 
         let theme_render_trigger: Arc<dyn ThemeRenderTrigger> =
