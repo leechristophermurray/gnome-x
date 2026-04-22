@@ -109,6 +109,10 @@ impl AppearanceSettings for GSettingsAppearance {
         Self::get_string(IFACE_SCHEMA, "accent-color")
     }
 
+    fn get_color_scheme(&self) -> Result<String, AppError> {
+        Self::get_string(IFACE_SCHEMA, "color-scheme")
+    }
+
     fn set_accent_color(&self, id: &str) -> Result<(), AppError> {
         // Same same-value-suppression story as `set_wallpaper`. For
         // icons in particular the bounce is load-bearing: Adwaita

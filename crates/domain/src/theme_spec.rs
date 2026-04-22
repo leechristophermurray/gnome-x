@@ -410,6 +410,13 @@ pub struct ThemeSpec {
     /// point the use case overwrites `widget_colors` with a
     /// derivation from the live wallpaper palette.
     pub material_palette: crate::MaterialPaletteSpec,
+    /// Override for the colour the shell CSS tints its surfaces
+    /// (panel / dash / OSD / search entry) with. When `None`, the
+    /// generators use `tint.accent_hex` (the classic behaviour).
+    /// Material-palette mode sets this to the muted role-background
+    /// so the top panel and calendar popover visually match the
+    /// window chrome rather than staying on the stock accent.
+    pub shell_tint_override: Option<HexColor>,
 }
 
 impl ThemeSpec {
@@ -457,6 +464,7 @@ impl ThemeSpec {
             overview_blur: true,
             scaling: ScalingSpec::default(),
             material_palette: crate::MaterialPaletteSpec::default(),
+            shell_tint_override: None,
         }
     }
 }

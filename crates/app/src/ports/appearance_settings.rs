@@ -35,4 +35,11 @@ pub trait AppearanceSettings: Send + Sync {
     fn set_accent_color(&self, _id: &str) -> Result<(), AppError> {
         Ok(())
     }
+
+    /// Read `org.gnome.desktop.interface color-scheme`: `"default"`,
+    /// `"prefer-dark"`, or `"prefer-light"`. Default impl returns
+    /// `"default"` for mocks that predate the method.
+    fn get_color_scheme(&self) -> Result<String, AppError> {
+        Ok("default".into())
+    }
 }

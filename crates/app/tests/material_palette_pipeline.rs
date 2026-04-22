@@ -57,6 +57,7 @@ impl ThemeWriter for NoopWriter {
 #[derive(Default)]
 struct NoopAppearance {
     accent_writes: Mutex<Vec<String>>,
+    color_scheme: Mutex<String>,
 }
 impl AppearanceSettings for NoopAppearance {
     fn get_gtk_theme(&self) -> Result<String, AppError> {
@@ -95,6 +96,9 @@ impl AppearanceSettings for NoopAppearance {
     fn set_accent_color(&self, id: &str) -> Result<(), AppError> {
         self.accent_writes.lock().unwrap().push(id.to_owned());
         Ok(())
+    }
+    fn get_color_scheme(&self) -> Result<String, AppError> {
+        Ok(self.color_scheme.lock().unwrap().clone())
     }
 }
 
@@ -317,4 +321,83 @@ fn md3_propagates_night_pri_ignored_because_accent_enum_is_scheme_agnostic() {
 
     let writes = appearance.accent_writes.lock().unwrap();
     assert_eq!(*writes, vec!["green".to_string()], "day pri should drive accent");
+}
+
+#[test]
+fn md3_sets_shell_tint_override_to_background_role() {
+    // The user's panel / calendar popup / OSD should pick up the
+    // MD3 muted background, not the stock accent. We assert that
+    // the CSS generator receives a spec whose `shell_tint_override`
+    // is populated with the wallpaper-palette background colour
+    // appropriate to the active colour scheme.
+    let generator = Arc::new(CapturingCssGen::default());
+    let writer = Arc::new(NoopWriter);
+    let appearance = Arc::new(NoopAppearance::default());
+    *appearance.color_scheme.lock().unwrap() = "prefer-dark".into();
+    let palette = Arc::new(StubPalette(Some(rgb_hex())));
+    let uc = ApplyThemeUseCase::new(generator.clone(), writer, appearance)
+        .with_palette_provider(palette);
+
+    // Night permutation bg = palette[0] = #ff0000. Dark scheme, so
+    // MD3 should pick night.background = red.
+    let mut s = spec_with_user_overrides();
+    s.material_palette = MaterialPaletteSpec {
+        enabled: true,
+        day_permutation: Permutation::Bg2Pri0Sec1,   // day bg = palette[2] = blue
+        night_permutation: Permutation::Bg0Pri1Sec2, // night bg = palette[0] = red
+    };
+    s.tint.intensity = gnomex_domain::Opacity::from_fraction(0.5).unwrap();
+    uc.apply(&s).unwrap();
+
+    let captured = &generator.captured.lock().unwrap()[0];
+    let tint = captured
+        .shell_tint_override
+        .as_ref()
+        .expect("MD3 must populate shell_tint_override");
+    // Dark scheme should use the NIGHT role background, which under
+    // Bg0Pri1Sec2 is palette[0] = #ff0000.
+    assert_eq!(tint.as_str(), "#ff0000");
+}
+
+#[test]
+fn md3_shell_tint_follows_light_scheme_to_day_background() {
+    let generator = Arc::new(CapturingCssGen::default());
+    let writer = Arc::new(NoopWriter);
+    let appearance = Arc::new(NoopAppearance::default());
+    *appearance.color_scheme.lock().unwrap() = "prefer-light".into();
+    let palette = Arc::new(StubPalette(Some(rgb_hex())));
+    let uc = ApplyThemeUseCase::new(generator.clone(), writer, appearance)
+        .with_palette_provider(palette);
+
+    let mut s = spec_with_user_overrides();
+    s.material_palette = MaterialPaletteSpec {
+        enabled: true,
+        day_permutation: Permutation::Bg2Pri0Sec1,   // day bg = palette[2] = blue
+        night_permutation: Permutation::Bg0Pri1Sec2, // night bg = palette[0] = red
+    };
+    s.tint.intensity = gnomex_domain::Opacity::from_fraction(0.5).unwrap();
+    uc.apply(&s).unwrap();
+
+    let captured = &generator.captured.lock().unwrap()[0];
+    let tint = captured.shell_tint_override.as_ref().unwrap();
+    // Light scheme → day.background = palette[2] = #0000ff.
+    assert_eq!(tint.as_str(), "#0000ff");
+}
+
+#[test]
+fn md3_disabled_leaves_shell_tint_override_none() {
+    // Non-MD3 Apply must not populate the override — the classic
+    // accent-tinted shell CSS path should run unchanged.
+    let generator = Arc::new(CapturingCssGen::default());
+    let writer = Arc::new(NoopWriter);
+    let appearance = Arc::new(NoopAppearance::default());
+    let palette = Arc::new(StubPalette(Some(rgb_hex())));
+    let uc = ApplyThemeUseCase::new(generator.clone(), writer, appearance)
+        .with_palette_provider(palette);
+
+    // MD3 off (default).
+    let s = spec_with_user_overrides();
+    uc.apply(&s).unwrap();
+    let captured = &generator.captured.lock().unwrap()[0];
+    assert!(captured.shell_tint_override.is_none());
 }

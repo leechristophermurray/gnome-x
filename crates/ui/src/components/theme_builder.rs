@@ -3241,6 +3241,10 @@ impl ThemeBuilderModel {
                     self.material_night_perm,
                 ),
             },
+            // Derived at apply-time by `derive_material_spec`; no UI
+            // knob — the user picks the palette permutation and we
+            // compute the matching shell tint.
+            shell_tint_override: None,
         })
     }
 }

@@ -110,6 +110,12 @@ pub fn build_theme_spec_from_gsettings() -> Result<ThemeSpec, AppError> {
             day_permutation: Permutation::from_index(app.uint("tb-md-day-perm")),
             night_permutation: Permutation::from_index(app.uint("tb-md-night-perm")),
         },
+        // None here — MD3 will populate this during
+        // `ApplyThemeUseCase::derive_material_spec` with the muted
+        // background role. The gsettings-side state doesn't
+        // persist a shell-tint hex; it's always re-derived from the
+        // live wallpaper palette on apply.
+        shell_tint_override: None,
     })
 }
 

@@ -205,6 +205,26 @@ impl ApplyThemeUseCase {
         let mut copy = spec.clone();
         copy.widget_colors = overrides;
 
+        // Shell-surface tinting: pick the currently-active scheme's
+        // background role and hand the raw hex to the shell CSS
+        // generator via `shell_tint_override`. `tint_shell_surfaces`
+        // blends this with its own dark-base constants + bumps the
+        // pct floor so the tint actually reads on a real panel. In
+        // other words: the top panel, dash, OSD popups, and search
+        // entry end up in the same colour family as the muted
+        // background the widget-colour overrides give window chrome.
+        let scheme = self.appearance.get_color_scheme().unwrap_or_default();
+        let shell_role = if scheme == "prefer-light" {
+            &day.background
+        } else {
+            // "default" and "prefer-dark" both get the night role —
+            // the GNOME shell is visually dark regardless of GTK
+            // colour-scheme, so pairing shell with night.background
+            // produces a legible deep-tinted panel.
+            &night.background
+        };
+        copy.shell_tint_override = Some(shell_role.clone());
+
         // Propagate the MD3 primary to the GNOME accent enum so
         // icon themes (Adwaita natively, Papirus via recolourer)
         // follow. The *day* primary wins the enum write — Adwaita's
@@ -224,9 +244,10 @@ impl ApplyThemeUseCase {
         }
 
         tracing::info!(
-            "material-palette applied (day={:?}, night={:?}, accent={accent_id})",
+            "material-palette applied (day={:?}, night={:?}, accent={accent_id}, shell_tint={})",
             spec.material_palette.day_permutation,
             spec.material_palette.night_permutation,
+            shell_role.as_str(),
         );
         Some(copy)
     }
