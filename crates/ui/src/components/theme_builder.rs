@@ -2054,45 +2054,56 @@ impl SimpleComponent for ThemeBuilderModel {
             .build();
         material_group.add(&material_toggle);
 
-        let material_day_combo = adw::ComboRow::builder()
-            .title("Day scheme")
-            .subtitle("Which colour plays each role under light mode")
-            .build();
-        let material_night_combo = adw::ComboRow::builder()
-            .title("Night scheme")
-            .subtitle("Which colour plays each role under dark mode")
-            .build();
-        {
-            use gnomex_domain::Permutation;
-            let labels = gtk::StringList::new(&[]);
-            for p in Permutation::ALL {
-                labels.append(p.label());
-            }
-            material_day_combo.set_model(Some(&labels));
-            let labels_night = gtk::StringList::new(&[]);
-            for p in Permutation::ALL {
-                labels_night.append(p.label());
-            }
-            material_night_combo.set_model(Some(&labels_night));
-            material_day_combo.set_selected(app_settings.uint("tb-md-day-perm"));
-            material_night_combo.set_selected(app_settings.uint("tb-md-night-perm"));
-        }
-        material_group.add(&material_day_combo);
-        material_group.add(&material_night_combo);
+        // Shared palette cache: read `cached-wallpaper-palette` once
+        // at init and refresh on every change so both permutation
+        // pickers repaint their swatches live. `Vec<String>` of hex
+        // entries; when fewer than three exist yet (first-run) we
+        // fall back to neutral placeholders.
+        let material_palette: std::rc::Rc<std::cell::RefCell<Vec<String>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(read_cached_palette_hexes(&app_settings)));
 
-        // Connect the combo rows now — the toggle handler is wired
-        // below so it can flip visibility on the rest of color_page.
+        let (material_day_row, refresh_day) = build_material_perm_row(
+            "Day scheme",
+            "Which colour plays each role under light mode",
+            app_settings.uint("tb-md-day-perm"),
+            material_palette.clone(),
+            {
+                let sender = sender.clone();
+                std::rc::Rc::new(move |idx: u32| {
+                    sender.input(ThemeBuilderMsg::SetMaterialDayPerm(idx));
+                })
+            },
+        );
+        let (material_night_row, refresh_night) = build_material_perm_row(
+            "Night scheme",
+            "Which colour plays each role under dark mode",
+            app_settings.uint("tb-md-night-perm"),
+            material_palette.clone(),
+            {
+                let sender = sender.clone();
+                std::rc::Rc::new(move |idx: u32| {
+                    sender.input(ThemeBuilderMsg::SetMaterialNightPerm(idx));
+                })
+            },
+        );
+        material_group.add(&material_day_row);
+        material_group.add(&material_night_row);
+
+        // Whenever the daemon writes a new palette, rebuild the
+        // swatches on both rows so the user sees colours that
+        // actually live in the current wallpaper — not the ones
+        // from whichever image was on screen when the app opened.
         {
-            let sender = sender.clone();
-            material_day_combo.connect_selected_notify(move |r| {
-                sender.input(ThemeBuilderMsg::SetMaterialDayPerm(r.selected()));
-            });
-        }
-        {
-            let sender = sender.clone();
-            material_night_combo.connect_selected_notify(move |r| {
-                sender.input(ThemeBuilderMsg::SetMaterialNightPerm(r.selected()));
-            });
+            let palette = material_palette.clone();
+            let refresh_day = refresh_day.clone();
+            let refresh_night = refresh_night.clone();
+            app_settings
+                .clone()
+                .connect_changed(Some("cached-wallpaper-palette"), move |s, _| {
+                    *palette.borrow_mut() = read_cached_palette_hexes(s);
+                    refresh_day();
+                    refresh_night();
+                });
         }
 
         // Visibility handler: when the toggle flips, every
@@ -3247,6 +3258,238 @@ impl ThemeBuilderModel {
             shell_tint_override: None,
         })
     }
+}
+
+/// Read the top-N hex strings out of `cached-wallpaper-palette`.
+/// Each GSetting entry is `"HEX:ACCENT_ID"`; we strip the suffix.
+/// Returns whatever's present — callers that need exactly 3 pad
+/// the tail with neutral placeholders so the UI still renders on
+/// first run before the daemon has extracted anything.
+fn read_cached_palette_hexes(settings: &gio::Settings) -> Vec<String> {
+    let has_key = settings
+        .settings_schema()
+        .map(|s| s.has_key("cached-wallpaper-palette"))
+        .unwrap_or(false);
+    if !has_key {
+        return Vec::new();
+    }
+    settings
+        .strv("cached-wallpaper-palette")
+        .iter()
+        .filter_map(|entry| {
+            let s = entry.as_str();
+            let hex = s.split(':').next()?;
+            if hex.starts_with('#') && hex.len() == 7 {
+                Some(hex.to_owned())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Pad a palette out to exactly three hex strings so the swatch
+/// row always has something to render. Missing entries become
+/// mid-grey so the user can tell "this slot isn't extracted yet"
+/// at a glance.
+fn padded_palette(hexes: &[String]) -> [String; 3] {
+    let fb = "#808080";
+    [
+        hexes.first().cloned().unwrap_or_else(|| fb.into()),
+        hexes.get(1).cloned().unwrap_or_else(|| fb.into()),
+        hexes.get(2).cloned().unwrap_or_else(|| fb.into()),
+    ]
+}
+
+/// Build a tiny circular colour swatch backed by a scoped CSS
+/// provider. 14×14 is large enough to read at a glance and small
+/// enough to fit three side-by-side inside an AdwActionRow suffix.
+fn make_swatch(hex: &str, size: i32) -> gtk::Box {
+    let b = gtk::Box::builder()
+        .width_request(size)
+        .height_request(size)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .build();
+    let css_class = format!("md3-swatch-{}", hex.trim_start_matches('#'));
+    b.add_css_class(&css_class);
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(&format!(
+        ".{css_class} {{ background: {hex}; border-radius: 50%; \
+          min-width: {size}px; min-height: {size}px; \
+          border: 1px solid alpha(currentColor, 0.15); }}"
+    ));
+    gtk::style_context_add_provider_for_display(
+        &gtk::gdk::Display::default().unwrap(),
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+    b
+}
+
+/// Build a horizontal strip of three swatches in the order
+/// (background, primary, secondary) for the given permutation +
+/// palette. Used in both the collapsed row and the popover.
+fn make_perm_swatch_strip(
+    perm: gnomex_domain::Permutation,
+    palette: &[String; 3],
+    size: i32,
+) -> gtk::Box {
+    let (b, p, s) = perm.indices();
+    let hbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(4)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .build();
+    hbox.append(&make_swatch(&palette[b], size));
+    hbox.append(&make_swatch(&palette[p], size));
+    hbox.append(&make_swatch(&palette[s], size));
+    hbox
+}
+
+/// Build a Material-palette permutation picker. Looks like an
+/// `AdwActionRow`, but the suffix is a MenuButton whose popover
+/// shows six rows — each with three swatches in (bg, primary,
+/// secondary) order plus the permutation label — so the user
+/// can see the exact colour assignments they'd be choosing.
+///
+/// Returns the row itself plus a "refresh" closure the caller
+/// invokes when `cached-wallpaper-palette` changes so the
+/// swatches repaint without rebuilding the whole page.
+fn build_material_perm_row(
+    title: &str,
+    subtitle: &str,
+    initial_index: u32,
+    palette: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    on_select: std::rc::Rc<dyn Fn(u32)>,
+) -> (adw::ActionRow, std::rc::Rc<dyn Fn()>) {
+    let row = adw::ActionRow::builder()
+        .title(title)
+        .subtitle(subtitle)
+        .activatable(true)
+        .build();
+
+    // MenuButton in the suffix slot. We attach the popover here;
+    // the button itself doesn't need an icon because its child is
+    // the current selection's swatch strip + a chevron.
+    let menu_button = gtk::MenuButton::builder()
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+
+    // Track the currently-selected index in an Rc<Cell> so both
+    // the popover click handlers and the refresh closure can read
+    // the latest value without capture-gymnastics.
+    let selected: std::rc::Rc<std::cell::Cell<u32>> =
+        std::rc::Rc::new(std::cell::Cell::new(
+            initial_index.min(gnomex_domain::Permutation::ALL.len() as u32 - 1),
+        ));
+
+    // Collapsed-display child: 3 swatches + chevron.
+    let button_child = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .valign(gtk::Align::Center)
+        .build();
+    menu_button.set_child(Some(&button_child));
+
+    // Popover contents — a ListBox that rebuilds on every refresh
+    // so the swatches always reflect the latest palette.
+    let popover = gtk::Popover::builder().has_arrow(true).build();
+    let popover_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .build();
+    popover.set_child(Some(&popover_list));
+    menu_button.set_popover(Some(&popover));
+
+    row.add_suffix(&menu_button);
+
+    // Shared refresh: rebuilds the button child AND the popover
+    // rows based on the current palette snapshot. The closure is
+    // what the caller hooks up to the GSettings `changed` signal.
+    let refresh: std::rc::Rc<dyn Fn()> = {
+        let palette = palette.clone();
+        let selected = selected.clone();
+        let button_child = button_child.clone();
+        let popover_list = popover_list.clone();
+        let popover = popover.clone();
+        let on_select = on_select.clone();
+        std::rc::Rc::new(move || {
+            let pal = padded_palette(&palette.borrow());
+
+            // --- Collapsed suffix: [3 swatches] [chevron] ---
+            while let Some(child) = button_child.first_child() {
+                button_child.remove(&child);
+            }
+            let cur = gnomex_domain::Permutation::from_index(selected.get());
+            button_child.append(&make_perm_swatch_strip(cur, &pal, 12));
+            button_child.append(&gtk::Image::from_icon_name("pan-down-symbolic"));
+
+            // --- Popover: rebuild 6 rows ---
+            while let Some(child) = popover_list.first_child() {
+                popover_list.remove(&child);
+            }
+            for perm in gnomex_domain::Permutation::ALL {
+                let idx = perm.to_index();
+                let item = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Horizontal)
+                    .spacing(10)
+                    .margin_start(8)
+                    .margin_end(8)
+                    .margin_top(6)
+                    .margin_bottom(6)
+                    .build();
+                item.append(&make_perm_swatch_strip(perm, &pal, 14));
+                let label = gtk::Label::builder()
+                    .label(perm.label())
+                    .halign(gtk::Align::Start)
+                    .hexpand(true)
+                    .build();
+                item.append(&label);
+                // Checkmark on the currently-selected permutation.
+                if idx == selected.get() {
+                    item.append(&gtk::Image::from_icon_name("object-select-symbolic"));
+                }
+                let list_row = gtk::ListBoxRow::builder().child(&item).build();
+                // Wrap in a button so it gets keyboard focus and
+                // click styling out-of-the-box.
+                let btn = gtk::Button::builder()
+                    .css_classes(["flat"])
+                    .child(&list_row)
+                    .build();
+                {
+                    let selected = selected.clone();
+                    let popover = popover.clone();
+                    let on_select = on_select.clone();
+                    let button_child = button_child.clone();
+                    let palette = palette.clone();
+                    btn.connect_clicked(move |_| {
+                        selected.set(idx);
+                        popover.popdown();
+                        // Repaint just the suffix — the popover
+                        // will rebuild next time it opens, either
+                        // via this refresh or the palette-change
+                        // refresh.
+                        while let Some(c) = button_child.first_child() {
+                            button_child.remove(&c);
+                        }
+                        let pal = padded_palette(&palette.borrow());
+                        button_child.append(&make_perm_swatch_strip(perm, &pal, 12));
+                        button_child.append(&gtk::Image::from_icon_name("pan-down-symbolic"));
+                        on_select(idx);
+                    });
+                }
+                popover_list.append(&btn);
+            }
+        })
+    };
+
+    // Initial paint.
+    refresh();
+
+    (row, refresh)
 }
 
 /// Parse a user-supplied hex string that may be empty, trimming
