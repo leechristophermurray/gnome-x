@@ -1053,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "gnomex-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "gnomex-domain",
@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "gnomex-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "gnomex-daemon"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "gdk-pixbuf",
@@ -1096,11 +1096,11 @@ dependencies = [
 
 [[package]]
 name = "gnomex-domain"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "gnomex-infra"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1129,7 +1129,7 @@ dependencies = [
 
 [[package]]
 name = "gnomex-ui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "gio",
